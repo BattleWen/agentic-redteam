@@ -88,7 +88,6 @@ class MemoryStore:
             "risk_type_counts": dict(risk_type_counts),
             "recent_skill_names": self.recent_skill_names(5),
             "recent_risk_types": self.recent_risk_types(5),
-            "matrix": risk_matrix,
             "risk_matrix": risk_matrix,
         }
 

@@ -50,6 +50,31 @@ def test_planner_selects_initial_search_skills() -> None:
     assert plan[0].args["selected_skill_count"] == 1
 
 
+def test_planner_uses_requested_workflow_search_pool() -> None:
+    """Planner should not silently force the basic workflow search pool."""
+    specs = SkillLoader(PROJECT_ROOT).discover()
+    registry = SkillRegistry(specs)
+    planner = RuleBasedPlanner()
+    state = make_state()
+    state.workflow_name = "custom"
+    workflows = {
+        "basic": load_workflows()["basic"],
+        "custom": Workflow(
+            name="custom",
+            description="Custom workflow",
+            initial_stage="search",
+            skill_groups={"search": ["toy-encoding"]},
+            policy={"exploration_weight": 0.2},
+            conditions={},
+        ),
+    }
+
+    plan = planner.plan(state, workflows, registry)
+
+    assert plan[0].args["search_pool"] == ["toy-encoding"]
+    assert plan[0].args["exploration_weight"] == 0.2
+
+
 def test_planner_executes_pending_candidates() -> None:
     """Planner should send pending candidates to the environment."""
     specs = SkillLoader(PROJECT_ROOT).discover()

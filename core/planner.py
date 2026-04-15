@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import json
 import os
-from collections import Counter
 from typing import Any
 from urllib import error, request
 
@@ -47,8 +46,8 @@ class RuleBasedPlanner:
             ]
 
         stage = state.active_workflow_stage
-        basic = workflows["basic"]
-        escalation = workflows.get("escalation", basic)
+        workflow = self._workflow_for_state(state, workflows)
+        escalation = workflows.get("escalation", workflow)
 
         if stage == "search":
             return [
@@ -57,16 +56,16 @@ class RuleBasedPlanner:
                     target=None,
                     args={
                         "mode": "search",
-                        "search_pool": basic.get_group("search"),
+                        "search_pool": workflow.get_group("search"),
                         "selected_skill_count": 1,
-                        "exploration_weight": float(basic.get_policy("exploration_weight", 0.45)),
+                        "exploration_weight": float(workflow.get_policy("exploration_weight", 0.45)),
                     },
                     reason="Search stage chooses one structured search action over the available skill space.",
                 )
             ]
 
         if stage == "refine":
-            skill_name = self._best_recent_skill(state) or basic.get_group("search")[0]
+            skill_name = self._best_recent_skill(state) or workflow.get_group("search")[0]
             return [
                 PlanStep(
                     action_type="invoke_meta_skill",
@@ -107,7 +106,7 @@ class RuleBasedPlanner:
                         reason="Combine two recent toy skills into a draft composite skill.",
                     )
                 ]
-            fallback_skill = recent_skill_names[0] if recent_skill_names else basic.get_group("search")[0]
+            fallback_skill = recent_skill_names[0] if recent_skill_names else workflow.get_group("search")[0]
             return [
                 PlanStep(
                     action_type="invoke_meta_skill",
@@ -128,7 +127,7 @@ class RuleBasedPlanner:
             ]
 
         if stage == "escalation_return":
-            search_pool = escalation.get_group("return_search") or basic.get_group("search")
+            search_pool = escalation.get_group("return_search") or workflow.get_group("search")
             return [
                 PlanStep(
                     action_type="select_search_paths",
@@ -137,7 +136,7 @@ class RuleBasedPlanner:
                         "mode": "post_escalation",
                         "search_pool": search_pool,
                         "selected_skill_count": 1,
-                        "exploration_weight": float(basic.get_policy("exploration_weight", 0.45)),
+                        "exploration_weight": float(workflow.get_policy("exploration_weight", 0.45)),
                     },
                     reason="Return from escalation with one focused search action.",
                 )
@@ -162,23 +161,23 @@ class RuleBasedPlanner:
         workflows: dict[str, Workflow],
     ) -> None:
         """Update the workflow stage after a batch evaluation."""
-        basic = workflows["basic"]
-        escalation = workflows.get("escalation", basic)
+        workflow = self._workflow_for_state(state, workflows)
+        escalation = workflows.get("escalation")
         state_dict = state.to_dict()
 
-        if basic.evaluate_condition("refusal_high", state_dict):
-            state.active_workflow_stage = basic.get_policy("escalation_stage", "escalation_memory")
+        if workflow.evaluate_condition("refusal_high", state_dict):
+            state.active_workflow_stage = workflow.get_policy("escalation_stage", "escalation_memory")
             return
 
-        if basic.evaluate_condition("usefulness_high", state_dict):
-            state.active_workflow_stage = basic.get_policy("refine_stage", "refine")
+        if workflow.evaluate_condition("usefulness_high", state_dict):
+            state.active_workflow_stage = workflow.get_policy("refine_stage", "refine")
             return
 
-        if escalation.evaluate_condition("repeated_failures", state_dict):
+        if escalation and escalation.evaluate_condition("repeated_failures", state_dict):
             state.active_workflow_stage = "escalation_memory"
             return
 
-        state.active_workflow_stage = "search"
+        state.active_workflow_stage = workflow.get_policy("search_stage", workflow.initial_stage)
 
     def advance_after_action(
         self,
@@ -187,7 +186,8 @@ class RuleBasedPlanner:
         workflows: dict[str, Workflow],
     ) -> None:
         """Move between deterministic intermediate stages after non-eval actions."""
-        escalation = workflows.get("escalation", workflows["basic"])
+        workflow = self._workflow_for_state(state, workflows)
+        escalation = workflows.get("escalation", workflow)
 
         if plan_step.action_type == "summarize_memory":
             state.active_workflow_stage = "escalation_analysis"
@@ -203,31 +203,17 @@ class RuleBasedPlanner:
 
         if plan_step.action_type == "invoke_meta_skill":
             if state.active_workflow_stage == "refine":
-                state.active_workflow_stage = "search"
+                state.active_workflow_stage = workflow.get_policy("search_stage", workflow.initial_stage)
             elif state.active_workflow_stage in {"escalation_meta", "escalation_discover"}:
                 state.active_workflow_stage = escalation.get_policy("return_stage", "escalation_return")
 
-    def _choose_from_pool(
-        self,
-        state: AgentState,
-        pool: list[str],
-        *,
-        count: int,
-    ) -> list[str]:
-        """Choose skills from a pool using usage counts and recent history."""
-        skill_counts = Counter(state.memory_summary.get("skill_counts", {}))
-        recent = list(reversed(state.memory_summary.get("recent_skill_names", [])))
-        recent_bias = {name: index for index, name in enumerate(recent)}
-
-        ranked = sorted(
-            pool,
-            key=lambda name: (
-                skill_counts.get(name, 0),
-                recent_bias.get(name, 999),
-                name,
-            ),
-        )
-        return ranked[: max(count, 1)]
+    def _workflow_for_state(self, state: AgentState, workflows: dict[str, Workflow]) -> Workflow:
+        """Return the requested workflow without silently forcing basic."""
+        if state.workflow_name in workflows:
+            return workflows[state.workflow_name]
+        if "basic" in workflows:
+            return workflows["basic"]
+        return next(iter(workflows.values()))
 
     def _best_recent_skill(self, state: AgentState) -> str | None:
         """Recover the best recent skill name from the last evaluation metadata."""
@@ -317,10 +303,10 @@ class LLMPlanner(RuleBasedPlanner):
         registry: SkillRegistry,
     ) -> dict[str, Any]:
         """Build the action constraints for the current stage."""
-        basic = workflows["basic"]
-        escalation = workflows.get("escalation", basic)
+        workflow = self._workflow_for_state(state, workflows)
+        escalation = workflows.get("escalation", workflow)
         stage = state.active_workflow_stage
-        fallback_skill = self._best_recent_skill(state) or basic.get_group("search")[0]
+        fallback_skill = self._best_recent_skill(state) or workflow.get_group("search")[0]
 
         if stage == "search":
             return {
@@ -332,13 +318,13 @@ class LLMPlanner(RuleBasedPlanner):
                 "default_args": {
                     "select_search_paths": {
                         "mode": "search",
-                        "search_pool": basic.get_group("search"),
+                        "search_pool": workflow.get_group("search"),
                         "selected_skill_count": 1,
-                        "exploration_weight": float(basic.get_policy("exploration_weight", 0.45)),
+                        "exploration_weight": float(workflow.get_policy("exploration_weight", 0.45)),
                     },
                     "stop": {},
                 },
-                "allowed_search_pool": basic.get_group("search"),
+                "allowed_search_pool": workflow.get_group("search"),
             }
 
         if stage == "refine":
@@ -381,13 +367,13 @@ class LLMPlanner(RuleBasedPlanner):
                 "default_args": {
                     "select_search_paths": {
                         "mode": "post_escalation",
-                        "search_pool": escalation.get_group("return_search") or basic.get_group("search"),
+                        "search_pool": escalation.get_group("return_search") or workflow.get_group("search"),
                         "selected_skill_count": 1,
-                        "exploration_weight": float(basic.get_policy("exploration_weight", 0.45)),
+                        "exploration_weight": float(workflow.get_policy("exploration_weight", 0.45)),
                     },
                     "stop": {},
                 },
-                "allowed_search_pool": escalation.get_group("return_search") or basic.get_group("search"),
+                "allowed_search_pool": escalation.get_group("return_search") or workflow.get_group("search"),
             }
 
         if stage == "analysis":

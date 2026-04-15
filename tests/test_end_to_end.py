@@ -40,7 +40,6 @@ def test_end_to_end_basic_workflow_runs(tmp_path: Path) -> None:
     assert (run_dir / "steps.jsonl").exists()
     assert (run_dir / "version_events.jsonl").exists()
     assert (run_dir / "evals.jsonl").exists()
-    assert "matrix" in summary["memory_summary"]
     assert "risk_matrix" in summary["memory_summary"]
 
 

@@ -12,7 +12,7 @@ from core.executor import SkillExecutor
 from core.memory_store import MemoryStore
 from core.planner import LLMPlanner, RuleBasedPlanner
 from core.registry import SkillRegistry
-from core.schemas import AgentState, MemoryEntry, SkillContext, SkillExecutionResult
+from core.schemas import AgentState, MemoryEntry, PlanStep, SkillContext, SkillExecutionResult
 from core.selector import SearchSkillSelector
 from core.skill_loader import SkillLoader
 from core.utils import append_jsonl, ensure_dir, make_run_id, read_yaml, utc_now_iso, write_json
@@ -92,7 +92,9 @@ class PlannerLoop:
     ) -> dict[str, Any]:
         """Run the planner loop from start to finish."""
         workflows = self._load_workflows()
-        chosen_workflow = workflows.get(workflow_name, workflows["basic"])
+        if workflow_name not in workflows:
+            raise ValueError(f"Unknown workflow: {workflow_name}")
+        chosen_workflow = workflows[workflow_name]
 
         budget = BudgetManager(
             max_steps=max_steps or int(self.config["budgets"]["max_steps"]),
@@ -123,7 +125,7 @@ class PlannerLoop:
             if len(plan_steps) == 1 and plan_steps[0].action_type == "stop":
                 break
 
-            for plan_step in plan_steps:
+            for index, plan_step in enumerate(plan_steps):
                 self._execute_plan_step(
                     plan_step=plan_step,
                     state=state,
@@ -132,8 +134,9 @@ class PlannerLoop:
                     run_dir=run_dir,
                     workflows=workflows,
                 )
-                state.memory_summary = memory.summary()
-                state.budget_remaining = budget.remaining()
+                if index < len(plan_steps) - 1:
+                    state.memory_summary = memory.summary()
+                    state.budget_remaining = budget.remaining()
                 if state.active_workflow_stage == "stop":
                     break
 
@@ -145,14 +148,16 @@ class PlannerLoop:
             if state.active_workflow_stage == "stop":
                 break
 
+        state.memory_summary = memory.summary()
+        state.budget_remaining = budget.remaining()
         final_summary = {
             "run_id": state.run_id,
             "workflow": state.workflow_name,
             "final_stage": state.active_workflow_stage,
             "steps_completed": state.current_step,
             "planner_flags": state.planner_flags,
-            "budget_remaining": budget.remaining(),
-            "memory_summary": memory.summary(),
+            "budget_remaining": state.budget_remaining,
+            "memory_summary": state.memory_summary,
             "last_eval": state.last_eval,
             "artifacts": state.artifacts,
             "generated_run_dir": str(run_dir),
@@ -246,8 +251,8 @@ class PlannerLoop:
         for path in sorted(workflow_dir.glob("*.yaml")):
             workflow = Workflow.from_file(path)
             workflows[workflow.name] = workflow
-        if "basic" not in workflows:
-            raise ValueError("basic workflow is required.")
+        if not workflows:
+            raise ValueError("At least one workflow YAML file is required.")
         return workflows
 
     def _execute_plan_step(
@@ -278,7 +283,7 @@ class PlannerLoop:
                 and str(plan_step.target) == "refine-skill"
                 and prior_stage == "refine"
             ):
-                workflow = workflows.get(state.workflow_name, workflows["basic"])
+                workflow = workflows.get(state.workflow_name) or next(iter(workflows.values()))
                 self._apply_refinement_decision(
                     state=state,
                     run_dir=run_dir,
@@ -343,6 +348,7 @@ class PlannerLoop:
                 memory,
                 budget,
                 run_dir,
+                workflows,
             )
             self._record_version_observations(
                 state=state,
@@ -453,10 +459,10 @@ class PlannerLoop:
                 if budget.remaining()["skill_calls"] <= 0:
                     state.active_workflow_stage = "stop"
                     return
-                selected_step = type("SelectedPlanStep", (), {
-                    "action_type": "invoke_skill",
-                    "target": node.skill_name,
-                    "args": {
+                selected_step = PlanStep(
+                    action_type="invoke_skill",
+                    target=node.skill_name,
+                    args={
                         "mode": str(plan_step.args.get("mode", "selected_search")),
                         "selection_score": round(node.score, 6),
                         "prompt_bucket": path.prompt_bucket,
@@ -464,8 +470,8 @@ class PlannerLoop:
                         "selection_id": path.path_id,
                         "selection_rank": selection_rank,
                     },
-                    "reason": path.reason,
-                })()
+                    reason=path.reason,
+                )
                 self._invoke_skill_like_step(selected_step, state, memory, budget, run_dir)
 
     def _invoke_skill_like_step(
@@ -556,6 +562,7 @@ class PlannerLoop:
         memory: MemoryStore,
         budget: BudgetManager,
         run_dir: Path,
+        workflows: dict[str, Workflow],
     ) -> tuple[
         dict[str, Any],
         dict[tuple[str, str], dict[str, Any]],
@@ -568,12 +575,18 @@ class PlannerLoop:
         )
         eval_payload = eval_result.to_dict()
 
-        if budget.remaining()["skill_calls"] > 0 and "evaluation-mock" in state.available_skills:
-            evaluation_spec = self.registry.get("evaluation-mock")
+        workflow = workflows.get(state.workflow_name)
+        evaluation_skills = workflow.get_group("evaluation") if workflow else []
+        evaluation_skill = next(
+            (skill_name for skill_name in evaluation_skills if skill_name in state.available_skills),
+            None,
+        )
+        if budget.remaining()["skill_calls"] > 0 and evaluation_skill:
+            evaluation_spec = self.registry.get(evaluation_skill)
             context = self._build_skill_context(
                 state=state,
                 memory=memory,
-                plan_args={"mode": "evaluation-mock"},
+                plan_args={"mode": evaluation_skill},
                 skill_name=evaluation_spec.name,
             )
             context.extra["last_responses"] = state.last_responses
