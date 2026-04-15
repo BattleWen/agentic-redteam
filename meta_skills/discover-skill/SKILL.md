@@ -2,7 +2,7 @@
 name: discover-skill
 description: Draft a new harmless toy skill concept from repeated failure patterns.
 metadata:
-  version: 0.1.0
+  version: "1.0"
 ---
 
 # discover-skill

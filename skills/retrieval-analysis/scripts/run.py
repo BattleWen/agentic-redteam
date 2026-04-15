@@ -20,12 +20,17 @@ def main() -> None:
 
     observations = []
     refusal_score = float(evaluator_feedback.get("refusal_score", 0.0))
-    usefulness_score = float(evaluator_feedback.get("usefulness_score", 0.0))
+    response_risk_score = float(
+        dict(evaluator_feedback.get("metadata", {}).get("component_summary", {})).get(
+            "avg_response_risk_score",
+            0.0,
+        )
+    )
 
     if refusal_score >= 0.70:
         observations.append("Recent batch showed high refusal in the mock evaluator.")
-    if usefulness_score < 0.65:
-        observations.append("Recent usefulness looked modest, so another search or meta step may help.")
+    if response_risk_score >= 0.60:
+        observations.append("Recent batch showed elevated response risk.")
     if not observations:
         observations.append("Recent batch looked stable enough for continued toy search.")
 

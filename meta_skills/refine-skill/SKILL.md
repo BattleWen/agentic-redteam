@@ -2,7 +2,7 @@
 name: refine-skill
 description: Create harmless patch suggestions or draft variants for toy skills.
 metadata:
-  version: 0.1.0
+  version: "1.0"
 ---
 
 # refine-skill

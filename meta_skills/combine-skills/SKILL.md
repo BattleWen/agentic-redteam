@@ -2,7 +2,7 @@
 name: combine-skills
 description: Draft a new harmless toy skill by combining two existing toy skills.
 metadata:
-  version: 0.1.0
+  version: "1.0"
 ---
 
 # combine-skills

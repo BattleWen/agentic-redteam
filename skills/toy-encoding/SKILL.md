@@ -2,7 +2,7 @@
 name: toy-encoding
 description: Harmless formatting and encoding transformations for toy candidate generation.
 metadata:
-  version: 0.1.0
+  version: "1.0"
 ---
 
 # toy-encoding
@@ -40,7 +40,7 @@ parameters_schema:
   required: []
 retrieval_hints:
   lexical_triggers: [json, yaml, xml, schema, format, encode, base64, rot13]
-  memory_keys: [matrix, bucket_counts, toy-encoding]
+  memory_keys: [risk_matrix, recent_risk_types, toy-encoding]
   prompt_buckets: [structured_request, general]
 composition:
   compatible_families: [toy-persona, toy-paraphrase]

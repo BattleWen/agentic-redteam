@@ -14,7 +14,7 @@ planner:
   backend: llm
   llm:
     provider: openai_compatible
-    base_url: "http://s-20260330192936-zlwm5-decode.ailab-safethm.svc:23297/v1" # http://s-20260414130351-jjtwx-decode.ailab-safethm.svc:22372/v1
+    base_url: "http://s-20260414130351-jjtwx-decode.ailab-safethm.svc:22372/v1" # qwen35 http://s-20260414130351-jjtwx-decode.ailab-safethm.svc:22372/v1 ｜ oss http://s-20260330192936-zlwm5-decode.ailab-safethm.svc:23297/v1
     model: "orm"
     api_key: "FAKE_API_KEY"
     timeout_seconds: 8

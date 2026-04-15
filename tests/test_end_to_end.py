@@ -41,8 +41,7 @@ def test_end_to_end_basic_workflow_runs(tmp_path: Path) -> None:
     assert (run_dir / "version_events.jsonl").exists()
     assert (run_dir / "evals.jsonl").exists()
     assert "matrix" in summary["memory_summary"]
-    assert "path_stats" in summary["memory_summary"]
-    assert "family_combination_stats" in summary["memory_summary"]
+    assert "risk_matrix" in summary["memory_summary"]
 
 
 def test_loop_enable_flags_switch_backends(tmp_path: Path) -> None:

@@ -2,7 +2,7 @@
 name: evaluation-mock
 description: Composite toy evaluation summary skill with optional safety guard annotations.
 metadata:
-  version: 0.2.0
+  version: "2.0"
 ---
 
 # evaluation-mock

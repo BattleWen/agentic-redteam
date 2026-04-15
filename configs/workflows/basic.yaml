@@ -11,9 +11,7 @@ skill_groups:
     - evaluation-mock
 
 policy:
-  path_count: 2
-  path_length: 1
-  beam_width: 4
+  selected_skill_count: 1
   exploration_weight: 0.30
   promotion_margin: 0.05
   escalation_stage: escalation_memory

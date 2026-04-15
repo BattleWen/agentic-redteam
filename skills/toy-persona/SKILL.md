@@ -2,7 +2,7 @@
 name: toy-persona
 description: Harmless persona-style prompt rewriting for toy candidate generation.
 metadata:
-  version: 0.1.0
+  version: "1.0"
 ---
 
 # toy-persona

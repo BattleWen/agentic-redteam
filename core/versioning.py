@@ -24,7 +24,12 @@ class SkillVersionManager:
         changed = False
         skills = state.setdefault("skills", {})
         for spec in self.registry.all():
+            normalized_spec_version = self._normalize_version(spec.version)
+            if spec.version != normalized_spec_version:
+                spec.version = normalized_spec_version
+                changed = True
             if spec.name in skills:
+                changed = self._normalize_skill_state(skills[spec.name]) or changed
                 continue
             skills[spec.name] = self._new_skill_state(spec.version)
             changed = True
@@ -44,8 +49,10 @@ class SkillVersionManager:
         """Return the active version for a skill family."""
         entry = self._skill_state(skill_name, create=False)
         if not entry:
-            return self.registry.get(skill_name).version
-        return str(entry.get("active_version", self.registry.get(skill_name).version))
+            return self._normalize_version(self.registry.get(skill_name).version)
+        return self._normalize_version(
+            str(entry.get("active_version", self.registry.get(skill_name).version))
+        )
 
     def active_draft_artifact(self, skill_name: str) -> dict[str, Any]:
         """Return the draft artifact attached to the active version, if any."""
@@ -61,7 +68,7 @@ class SkillVersionManager:
     def load_skill_state(self, skill_name: str) -> dict[str, Any]:
         """Return a view of the central active/previous state for one skill."""
         entry = self._skill_state(skill_name, create=True)
-        active_version = str(entry["active_version"])
+        active_version = self._normalize_version(str(entry["active_version"]))
         versions = {
             active_version: {
                 "status": "active",
@@ -71,6 +78,7 @@ class SkillVersionManager:
         }
         previous_version = entry.get("previous_version")
         if previous_version:
+            previous_version = self._normalize_version(str(previous_version))
             versions[str(previous_version)] = {
                 "status": "previous",
                 "draft_artifact": dict(entry.get("previous_draft_artifact", {})),
@@ -95,8 +103,12 @@ class SkillVersionManager:
         """Accumulate active metrics and rollback if ASR drops below previous."""
         state = self._load_state()
         entry = self._ensure_skill_state(state, skill_name)
-        active_version = str(entry.get("active_version", self.registry.get(skill_name).version))
-        if str(version) == active_version:
+        self._normalize_skill_state(entry)
+        active_version = self._normalize_version(
+            str(entry.get("active_version", self.registry.get(skill_name).version))
+        )
+        observed_version = self._normalize_version(str(version))
+        if observed_version == active_version:
             entry["active_metrics"] = self._merge_metrics(
                 dict(entry.get("active_metrics", self._empty_metrics())),
                 metrics,
@@ -106,7 +118,7 @@ class SkillVersionManager:
             "run_id": run_id,
             "step_id": step_id,
             "skill_name": skill_name,
-            "version": version,
+            "version": observed_version,
             "decision": "observe",
             "metrics": metrics,
         }
@@ -117,7 +129,7 @@ class SkillVersionManager:
         self._append_event(event)
         if rollback_event:
             self._append_event(rollback_event)
-        self.registry.get(skill_name).version = str(entry["active_version"])
+        self.registry.get(skill_name).version = self._normalize_version(str(entry["active_version"]))
         return event
 
     def consider_refinement(
@@ -130,11 +142,13 @@ class SkillVersionManager:
         promotion_margin: float,
         run_id: str,
         step_id: int,
+        version_bump: str = "minor",
     ) -> dict[str, Any]:
         """Promote a candidate into active and keep the former active as previous."""
         state = self._load_state()
         entry = self._ensure_skill_state(state, skill_name)
-        active_version = str(entry.get("active_version", base_version))
+        self._normalize_skill_state(entry)
+        active_version = self._normalize_version(str(entry.get("active_version", base_version)))
         active_metrics = dict(entry.get("active_metrics", self._empty_metrics()))
         baseline_score = float(active_metrics.get("avg_overall_score", 0.0))
         baseline_attempts = int(active_metrics.get("attempts", 0))
@@ -149,7 +163,12 @@ class SkillVersionManager:
             and candidate_asr >= baseline_asr
         )
 
-        candidate_version = self._next_patch_version(active_version)
+        normalized_bump = str(version_bump).strip().lower()
+        candidate_version = (
+            self._next_major_version(active_version)
+            if normalized_bump == "major"
+            else self._next_minor_version(active_version)
+        )
         event = {
             "timestamp": utc_now_iso(),
             "run_id": run_id,
@@ -160,6 +179,7 @@ class SkillVersionManager:
             "candidate_metrics": metrics,
             "baseline_metrics": active_metrics,
             "promotion_margin": promotion_margin,
+            "version_bump": "major" if normalized_bump == "major" else "minor",
             "draft_artifact": draft_artifact,
         }
 
@@ -184,7 +204,7 @@ class SkillVersionManager:
 
         self._write_state(state)
         self._append_event(event)
-        self.registry.get(skill_name).version = str(entry["active_version"])
+        self.registry.get(skill_name).version = self._normalize_version(str(entry["active_version"]))
         return event
 
     def _skill_state(self, skill_name: str, *, create: bool) -> dict[str, Any]:
@@ -199,11 +219,13 @@ class SkillVersionManager:
         skills = state.setdefault("skills", {})
         if skill_name not in skills:
             skills[skill_name] = self._new_skill_state(self.registry.get(skill_name).version)
+        else:
+            self._normalize_skill_state(skills[skill_name])
         return skills[skill_name]
 
     def _new_skill_state(self, version: str) -> dict[str, Any]:
         return {
-            "active_version": version,
+            "active_version": self._normalize_version(version),
             "previous_version": None,
             "active_draft_artifact": {},
             "previous_draft_artifact": {},
@@ -223,6 +245,7 @@ class SkillVersionManager:
         run_id: str,
         step_id: int,
     ) -> dict[str, Any] | None:
+        self._normalize_skill_state(entry)
         previous_version = entry.get("previous_version")
         if not previous_version:
             return None
@@ -241,9 +264,12 @@ class SkillVersionManager:
         if active_value >= previous_value - margin:
             return None
 
-        old_active_version = str(entry["active_version"])
+        old_active_version = self._normalize_version(str(entry["active_version"]))
         old_active_draft = dict(entry.get("active_draft_artifact", {}))
-        entry["active_version"], entry["previous_version"] = str(previous_version), old_active_version
+        entry["active_version"], entry["previous_version"] = (
+            self._normalize_version(str(previous_version)),
+            old_active_version,
+        )
         entry["active_draft_artifact"], entry["previous_draft_artifact"] = (
             dict(entry.get("previous_draft_artifact", {})),
             old_active_draft,
@@ -256,7 +282,7 @@ class SkillVersionManager:
             "skill_name": skill_name,
             "decision": "rollback",
             "from_version": old_active_version,
-            "to_version": str(previous_version),
+            "to_version": self._normalize_version(str(previous_version)),
             "metric": metric_name,
             "active_value": active_value,
             "previous_value": previous_value,
@@ -276,16 +302,72 @@ class SkillVersionManager:
         ensure_dir(self.state_root)
         append_jsonl(self.events_path, event)
 
+    def _normalize_skill_state(self, entry: dict[str, Any]) -> bool:
+        """Normalize stored active/previous versions to major.minor format."""
+        changed = False
+        for key in ("active_version", "previous_version"):
+            raw_value = entry.get(key)
+            if raw_value is None:
+                continue
+            normalized = self._normalize_version(str(raw_value))
+            if raw_value != normalized:
+                entry[key] = normalized
+                changed = True
+        return changed
+
+    def _normalize_version(self, version: str) -> str:
+        """Normalize legacy versions into two-part major.minor format."""
+        parts = [part.strip() for part in str(version).split(".") if part.strip()]
+        if len(parts) == 2:
+            major, minor = parts
+            try:
+                return f"{int(major)}.{int(minor)}"
+            except ValueError:
+                return version
+        if len(parts) == 3:
+            major, minor, patch = parts
+            try:
+                major_number = int(major)
+                minor_number = int(minor)
+                patch_number = int(patch)
+            except ValueError:
+                return version
+            if major_number == 0:
+                return f"{minor_number}.{patch_number}"
+            if patch_number == 0:
+                return f"{major_number}.{minor_number}"
+            return f"{major_number}.{patch_number}"
+        if len(parts) == 1:
+            try:
+                return f"{int(parts[0])}.0"
+            except ValueError:
+                return version
+        return version
+
+    def _next_minor_version(self, version: str) -> str:
+        """Return the next small-version identifier, e.g. 1.0 -> 1.1."""
+        major, minor = self._parse_two_part_version(version)
+        return f"{major}.{minor + 1}"
+
     def _next_patch_version(self, version: str) -> str:
-        parts = version.split(".")
-        if len(parts) != 3:
-            return f"{version}.1"
-        major, minor, patch = parts
+        """Backward-compatible alias for the old patch-bump helper."""
+        return self._next_minor_version(version)
+
+    def _next_major_version(self, version: str) -> str:
+        """Return the next major-version identifier, e.g. 1.2 -> 2.0."""
+        major, _minor = self._parse_two_part_version(version)
+        return f"{major + 1}.0"
+
+    def _parse_two_part_version(self, version: str) -> tuple[int, int]:
+        """Parse a normalized major.minor version."""
+        normalized = self._normalize_version(version)
+        parts = normalized.split(".")
+        if len(parts) != 2:
+            return 1, 0
         try:
-            patch_number = int(patch) + 1
+            return int(parts[0]), int(parts[1])
         except ValueError:
-            patch_number = 1
-        return f"{major}.{minor}.{patch_number}"
+            return 1, 0
 
     def _empty_metrics(self) -> dict[str, Any]:
         """Return an empty metrics record."""

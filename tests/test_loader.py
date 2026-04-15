@@ -49,7 +49,7 @@ def test_loader_uses_minimal_frontmatter_plus_runtime_metadata() -> None:
     frontmatter = read_markdown_frontmatter(skill_doc)
 
     assert set(frontmatter) == {"name", "description", "metadata"}
-    assert frontmatter["metadata"]["version"] == "0.1.0"
+    assert frontmatter["metadata"]["version"] == "1.0"
 
     spec = next(spec for spec in SkillLoader(PROJECT_ROOT).discover() if spec.name == "toy-encoding")
 

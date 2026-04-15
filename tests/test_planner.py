@@ -47,6 +47,7 @@ def test_planner_selects_initial_search_skills() -> None:
     assert len(plan) == 1
     assert plan[0].action_type == "select_search_paths"
     assert "search_pool" in plan[0].args
+    assert plan[0].args["selected_skill_count"] == 1
 
 
 def test_planner_executes_pending_candidates() -> None:

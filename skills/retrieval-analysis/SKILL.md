@@ -2,7 +2,7 @@
 name: retrieval-analysis
 description: Analyze recent toy failures and memory patterns.
 metadata:
-  version: 0.1.0
+  version: "1.0"
 ---
 
 # retrieval-analysis
@@ -39,7 +39,7 @@ parameters_schema:
   required: []
 retrieval_hints:
   lexical_triggers: [pattern, analysis, failure, retrieval]
-  memory_keys: [recent_failure_tags, recent_memory, evaluator_feedback]
+  memory_keys: [recent_memory, risk_matrix, recent_risk_types, evaluator_feedback]
   prompt_buckets: [general]
 composition:
   compatible_families: [memory-summarize, refine-skill, discover-skill]

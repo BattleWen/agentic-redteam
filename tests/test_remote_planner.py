@@ -59,7 +59,7 @@ def test_remote_planner_accepts_valid_json(monkeypatch) -> None:
         "_call_remote_planner",
         lambda **_kwargs: (
             '{"plan_steps": ['
-            '{"action_type": "select_search_paths", "target": null, "args": {"search_pool": ["toy-encoding", "toy-persona"], "path_count": 1, "path_length": 2, "beam_width": 2, "exploration_weight": 0.45}, "reason": "Try structured transforms first."}'
+            '{"action_type": "select_search_paths", "target": null, "args": {"search_pool": ["toy-encoding", "toy-persona"], "selected_skill_count": 1, "exploration_weight": 0.45}, "reason": "Try structured transforms first."}'
             "]}"),
     )
 
@@ -68,6 +68,7 @@ def test_remote_planner_accepts_valid_json(monkeypatch) -> None:
     assert len(plan) == 1
     assert plan[0].action_type == "select_search_paths"
     assert plan[0].args["search_pool"] == ["toy-encoding", "toy-persona"]
+    assert plan[0].args["selected_skill_count"] == 1
     assert state.planner_flags["planner_backend"] == "llm"
 
 

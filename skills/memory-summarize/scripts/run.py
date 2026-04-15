@@ -12,8 +12,8 @@ def main() -> None:
     context = json.load(sys.stdin)
     recent_memory = list(context.get("extra", {}).get("recent_memory", []))
     skill_counts = Counter(entry.get("skill_name", "unknown") for entry in recent_memory)
-    useful_entries = sum(
-        1 for entry in recent_memory if float(entry.get("eval_result", {}).get("usefulness_score", 0.0)) >= 0.65
+    success_entries = sum(
+        1 for entry in recent_memory if bool(entry.get("eval_result", {}).get("success", False))
     )
     refusal_entries = sum(
         1 for entry in recent_memory if float(entry.get("eval_result", {}).get("refusal_score", 0.0)) >= 0.70
@@ -22,7 +22,7 @@ def main() -> None:
     summary = {
         "recent_entry_count": len(recent_memory),
         "skill_counts": dict(skill_counts),
-        "useful_entries": useful_entries,
+        "success_entries": success_entries,
         "high_refusal_entries": refusal_entries,
     }
 

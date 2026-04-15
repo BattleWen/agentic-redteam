@@ -316,8 +316,8 @@ class PlannerLoop:
                 plan_step=plan_step,
                 stage_before=stage_before,
                 extra={
-                    "selected_paths": [item.get("skill_names", []) for item in selection],
-                    "path_count": len(selection),
+                    "selected_skills": [item.get("skill_names", []) for item in selection],
+                    "selected_skill_count": len(selection),
                 },
             )
             return
@@ -338,7 +338,7 @@ class PlannerLoop:
             return
 
         if plan_step.action_type == "evaluate_candidates":
-            eval_payload, skill_metrics, path_metrics = self._evaluate_candidates(
+            eval_payload, skill_metrics = self._evaluate_candidates(
                 state,
                 memory,
                 budget,
@@ -348,7 +348,6 @@ class PlannerLoop:
                 state=state,
                 run_dir=run_dir,
                 skill_metrics=skill_metrics,
-                path_metrics=path_metrics,
             )
             self.planner.route_after_evaluation(state, workflows)
             self._log_step_summary(
@@ -364,7 +363,6 @@ class PlannerLoop:
                     "success": eval_payload.get("success"),
                     "usefulness_score": eval_payload.get("usefulness_score"),
                     "refusal_score": eval_payload.get("refusal_score"),
-                    "path_metric_keys": sorted(path_metrics),
                 },
             )
             return
@@ -391,7 +389,7 @@ class PlannerLoop:
         run_dir: Path,
         plan_step,
     ) -> None:
-        """Run selector search and materialize chosen skill paths into pending candidates."""
+        """Run selector search and materialize the chosen skill into pending candidates."""
         search_pool = list(plan_step.args.get("search_pool", []))
         prompt_bucket = self.selector.classify_prompt_bucket(state.seed_prompt)
         recent_risk_types = list(state.memory_summary.get("recent_risk_types", []))
@@ -411,9 +409,7 @@ class PlannerLoop:
             state.active_workflow_stage = "stop"
             return
 
-        path_count = int(plan_step.args.get("path_count", 1))
-        beam_width = int(plan_step.args.get("beam_width", max(path_count, 1)))
-        path_length = int(plan_step.args.get("path_length", 1))
+        selected_skill_count = 1
         self.selector.exploration_weight = float(
             plan_step.args.get("exploration_weight", self.selector.exploration_weight)
         )
@@ -425,9 +421,9 @@ class PlannerLoop:
             memory_store=memory,
             version_manager=self.version_manager,
             registry=self.registry,
-            path_count=path_count,
-            beam_width=beam_width,
-            path_length=path_length,
+            path_count=selected_skill_count,
+            beam_width=selected_skill_count,
+            path_length=1,
         )
         if not paths:
             state.active_workflow_stage = "stop"
@@ -439,7 +435,6 @@ class PlannerLoop:
             dict.fromkeys(skill_name for path in paths for skill_name in path.skill_names)
         )
         state.artifacts["last_selection"] = [path.to_dict() for path in paths]
-        state.artifacts["last_search_paths"] = [path.to_dict() for path in paths]
         append_jsonl(
             run_dir / "selection_calls.jsonl",
             {
@@ -449,11 +444,11 @@ class PlannerLoop:
                 "prompt_bucket": state.current_prompt_bucket,
                 "risk_type": state.current_risk_type,
                 "seed_prompt": state.seed_prompt,
-                "paths": [path.to_dict() for path in paths],
+                "selected_skills": [path.to_dict() for path in paths],
             },
         )
 
-        for path_rank, path in enumerate(paths, start=1):
+        for selection_rank, path in enumerate(paths, start=1):
             for node in path.nodes:
                 if budget.remaining()["skill_calls"] <= 0:
                     state.active_workflow_stage = "stop"
@@ -466,12 +461,8 @@ class PlannerLoop:
                         "selection_score": round(node.score, 6),
                         "prompt_bucket": path.prompt_bucket,
                         "risk_type": path.risk_type,
-                        "selection_path_id": path.path_id,
-                        "selection_path_rank": path_rank,
-                        "selection_path_score": round(path.total_score, 6),
-                        "selection_path_skills": list(path.skill_names),
-                        "selection_path_length": len(path.skill_names),
-                        "selection_step_index": node.step_index,
+                        "selection_id": path.path_id,
+                        "selection_rank": selection_rank,
                     },
                     "reason": path.reason,
                 })()
@@ -503,12 +494,8 @@ class PlannerLoop:
                 candidate.setdefault("source_skill_version", self.version_manager.active_version(spec.name))
                 candidate.setdefault("prompt_bucket", state.current_prompt_bucket)
                 candidate.setdefault("risk_type", plan_step.args.get("risk_type", state.current_risk_type))
-                candidate.setdefault("selection_path_id", plan_step.args.get("selection_path_id"))
-                candidate.setdefault("selection_path_rank", plan_step.args.get("selection_path_rank"))
-                candidate.setdefault("selection_path_score", plan_step.args.get("selection_path_score"))
-                candidate.setdefault("selection_path_skills", list(plan_step.args.get("selection_path_skills", [spec.name])))
-                candidate.setdefault("selection_path_length", plan_step.args.get("selection_path_length", 1))
-                candidate.setdefault("selection_step_index", plan_step.args.get("selection_step_index", 0))
+                candidate.setdefault("selection_id", plan_step.args.get("selection_id"))
+                candidate.setdefault("selection_rank", plan_step.args.get("selection_rank"))
                 state.pending_candidates.append(candidate)
 
         state.artifacts[spec.name] = result.artifacts
@@ -572,7 +559,6 @@ class PlannerLoop:
     ) -> tuple[
         dict[str, Any],
         dict[tuple[str, str], dict[str, Any]],
-        dict[str, dict[str, Any]],
     ]:
         """Evaluate latest responses and persist them into memory."""
         eval_result = self.evaluator.evaluate(
@@ -685,16 +671,6 @@ class PlannerLoop:
             )
 
         skill_metrics = self._aggregate_skill_metrics(state.pending_candidates, eval_payload)
-        path_metrics = self._aggregate_path_metrics(state.pending_candidates, eval_payload)
-        for path_metric in path_metrics.values():
-            memory.observe_path(
-                str(path_metric.get("risk_type", state.current_risk_type)),
-                list(path_metric.get("skill_sequence", [])),
-                path_metric,
-            )
-
-        state.artifacts["last_path_metrics"] = path_metrics
-
         append_jsonl(
             run_dir / "evals.jsonl",
             {
@@ -707,7 +683,7 @@ class PlannerLoop:
 
         state.pending_candidates = []
         state.last_responses = []
-        return eval_payload, skill_metrics, path_metrics
+        return eval_payload, skill_metrics
 
     def _aggregate_skill_metrics(
         self,
@@ -755,70 +731,12 @@ class PlannerLoop:
 
         return grouped
 
-    def _aggregate_path_metrics(
-        self,
-        candidates: list[dict[str, Any]],
-        eval_payload: dict[str, Any],
-    ) -> dict[str, dict[str, Any]]:
-        """Aggregate path-level metrics from the score bundle."""
-        bundles = {
-            int(bundle["candidate_index"]): bundle
-            for bundle in eval_payload.get("metadata", {}).get("score_bundles", [])
-        }
-        grouped: dict[str, dict[str, Any]] = {}
-        for index, candidate in enumerate(candidates):
-            path_id = str(candidate.get("selection_path_id") or f"path-solo::{candidate.get('source_skill', 'unknown')}")
-            metric = grouped.setdefault(
-                path_id,
-                {
-                    "path_id": path_id,
-                    "path_rank": int(candidate.get("selection_path_rank", 0)),
-                    "skill_sequence": list(candidate.get("selection_path_skills", [candidate.get("source_skill", "unknown")])),
-                    "prompt_bucket": str(candidate.get("prompt_bucket", "general")),
-                    "risk_type": "unclassified",
-                    "step_id": int(eval_payload.get("step_id", -1)),
-                    "candidate_attempts": 0,
-                    "candidate_successes": 0,
-                    "avg_usefulness_score": 0.0,
-                    "avg_refusal_score": 0.0,
-                    "avg_overall_score": 0.0,
-                    "best_overall_score": 0.0,
-                },
-            )
-            bundle = bundles.get(index, {})
-            success = bool(bundle.get("candidate_success", eval_payload.get("success", False)))
-            refusal_score = float(bundle.get("refusal_score", eval_payload.get("refusal_score", 0.0)))
-            usefulness_score = float(eval_payload.get("usefulness_score", 0.0)) if not bundles else 0.0
-            overall_score = 1.0 if success else 0.0
-
-            metric["candidate_attempts"] += 1
-            metric["candidate_successes"] += int(success)
-            metric["avg_usefulness_score"] += usefulness_score
-            metric["avg_refusal_score"] += refusal_score
-            metric["avg_overall_score"] += overall_score
-            metric["best_overall_score"] = max(float(metric["best_overall_score"]), overall_score)
-            if metric.get("risk_type", "unclassified") == "unclassified":
-                metric["risk_type"] = str(bundle.get("primary_risk_type", "unclassified"))
-
-        for metric in grouped.values():
-            candidate_attempts = max(int(metric["candidate_attempts"]), 1)
-            candidate_successes = int(metric["candidate_successes"])
-            metric["attempts"] = 1
-            metric["successes"] = int(candidate_successes > 0)
-            metric["asr"] = candidate_successes / candidate_attempts
-            metric["avg_usefulness_score"] = float(metric["avg_usefulness_score"]) / candidate_attempts
-            metric["avg_refusal_score"] = float(metric["avg_refusal_score"]) / candidate_attempts
-            metric["avg_overall_score"] = float(metric["avg_overall_score"]) / candidate_attempts
-
-        return grouped
-
     def _record_version_observations(
         self,
         *,
         state: AgentState,
         run_dir: Path,
         skill_metrics: dict[tuple[str, str], dict[str, Any]],
-        path_metrics: dict[str, dict[str, Any]],
     ) -> None:
         """Record observed metrics so later refine actions can decide about promotion."""
         state.artifacts["last_skill_metrics"] = {
@@ -835,7 +753,6 @@ class PlannerLoop:
             )
             append_jsonl(run_dir / "version_events.jsonl", event)
             state.artifacts.setdefault("version_events", []).append(event)
-        state.artifacts["last_path_metrics"] = path_metrics
 
     def _apply_refinement_decision(
         self,
@@ -864,9 +781,16 @@ class PlannerLoop:
             promotion_margin=float(workflow.get_policy("promotion_margin", 0.03)),
             run_id=state.run_id,
             step_id=state.current_step,
+            version_bump=self._version_bump_from_artifact(dict(result.artifacts)),
         )
         state.artifacts.setdefault("version_events", []).append(event)
         append_jsonl(run_dir / "version_events.jsonl", event)
+
+    def _version_bump_from_artifact(self, artifact: dict[str, Any]) -> str:
+        """Read the requested version bump from a draft artifact."""
+        draft = dict(artifact.get("draft_skill", {}))
+        bump = str(draft.get("version_bump", artifact.get("version_bump", "minor"))).lower()
+        return "major" if bump == "major" else "minor"
 
     def _build_skill_context(
         self,
@@ -889,8 +813,6 @@ class PlannerLoop:
             "meta_skill_backend": self._resolve_meta_skill_backend_config(),
             "current_risk_type": state.current_risk_type,
             "memory_matrix": memory.matrix(),
-            "path_stats": memory.path_stats(),
-            "family_combination_stats": memory.family_combination_stats(),
             "active_versions": {
                 spec.name: self.version_manager.active_version(spec.name)
                 for spec in self.registry.all()

@@ -56,7 +56,7 @@ def test_executor_applies_active_draft_overrides() -> None:
         prior_candidates=[],
         evaluator_feedback={},
         extra={
-            "active_skill_version": "0.1.1",
+            "active_skill_version": "1.1",
             "active_skill_draft": {
                 "draft_skill": {
                     "runtime_overrides": {

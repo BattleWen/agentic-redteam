@@ -112,6 +112,7 @@ def main() -> None:
         "draft_skill": {
             "name": draft_name,
             "base_skill": skill_name,
+            "version_bump": "minor",
             "description": f"Draft refinement of {skill_name} with slightly richer harmless variation.",
             "suggestions": suggestions,
             "runtime_overrides": runtime_overrides,

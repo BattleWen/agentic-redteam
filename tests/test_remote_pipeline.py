@@ -43,12 +43,12 @@ print("last_eval_keys:", list(summary["last_eval"].keys()))
 
 selection_path = run_dir / "selection_calls.jsonl"
 if selection_path.exists():
-    print("\nselected paths:")
+    print("\nselected skills:")
     for line in selection_path.read_text(encoding="utf-8").strip().splitlines():
         item = json.loads(line)
-        paths = item.get("paths", [])
-        skill_paths = [p.get("skill_names", []) for p in paths]
-        print(f"step={item['step_id']} paths={skill_paths}")
+        selections = item.get("selected_skills", [])
+        skill_names = [p.get("skill_names", []) for p in selections]
+        print(f"step={item['step_id']} skills={skill_names}")
 
 eval_path = run_dir / "evals.jsonl"
 if eval_path.exists():

@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import math
 from dataclasses import asdict, dataclass, field
-from typing import Any
 
 
 @dataclass
@@ -154,154 +153,49 @@ class SearchSkillSelector:
         beam_width: int | None = None,
         path_length: int = 2,
     ) -> list[SearchPath]:
-        """Return the top-k searched skill paths for the current seed prompt."""
+        """Return top-k single-skill choices for the current seed prompt.
+
+        The public method keeps the historical name for compatibility with
+        planner code, but it no longer builds multi-step paths. Each returned
+        path contains exactly one selected skill.
+        """
         prompt_bucket = self.classify_prompt_bucket(seed_prompt)
         if not search_pool:
             return []
 
-        effective_path_count = max(path_count, 1)
-        effective_beam_width = max(beam_width or effective_path_count, effective_path_count)
-        effective_path_length = max(path_length, 1)
+        selected_count = max(path_count, 1)
+        scored_nodes: list[SearchNode] = []
+        for skill_name in search_pool:
+            node = self._score_node(
+                seed_prompt=seed_prompt,
+                prompt_bucket=prompt_bucket,
+                risk_type=target_risk_type,
+                skill_name=skill_name,
+                step_index=0,
+                search_pool=search_pool,
+                memory_store=memory_store,
+                version_manager=version_manager,
+                registry=registry,
+            )
+            if node is not None:
+                scored_nodes.append(node)
 
-        beam: list[SearchPath] = [
+        scored_nodes.sort(key=lambda item: item.score, reverse=True)
+        return [
             SearchPath(
-                path_id="seed",
-                skill_names=[],
-                total_score=0.0,
+                path_id=f"skill-{index}",
+                skill_names=[node.skill_name],
+                total_score=node.score,
                 prompt_bucket=prompt_bucket,
                 risk_type=target_risk_type,
                 diversity_bonus=0.0,
                 path_memory_bonus=0.0,
                 combination_bonus=0.0,
-                nodes=[],
-                reason="Beam search seed.",
+                nodes=[node],
+                reason=node.reason,
             )
+            for index, node in enumerate(scored_nodes[:selected_count], start=1)
         ]
-
-        for _depth in range(effective_path_length):
-            expansions: list[SearchPath] = []
-            for path in beam:
-                for skill_name in search_pool:
-                    next_path = self._expand_path(
-                        path=path,
-                        skill_name=skill_name,
-                        seed_prompt=seed_prompt,
-                        prompt_bucket=prompt_bucket,
-                        risk_type=target_risk_type,
-                        search_pool=search_pool,
-                        memory_store=memory_store,
-                        version_manager=version_manager,
-                        registry=registry,
-                    )
-                    if next_path is not None:
-                        expansions.append(next_path)
-
-            if not expansions:
-                break
-
-            expansions.sort(key=lambda item: item.total_score, reverse=True)
-            beam = expansions[:effective_beam_width]
-
-        if not beam:
-            return []
-
-        final_paths = [
-            path
-            for path in beam
-            if len(path.skill_names) == effective_path_length
-        ] or beam
-        final_paths.sort(key=lambda item: item.total_score, reverse=True)
-
-        ranked_paths: list[SearchPath] = []
-        for index, path in enumerate(final_paths[:effective_path_count], start=1):
-            ranked_paths.append(
-                SearchPath(
-                    path_id=f"path-{index}",
-                    skill_names=list(path.skill_names),
-                    total_score=path.total_score,
-                    prompt_bucket=path.prompt_bucket,
-                    risk_type=path.risk_type,
-                    diversity_bonus=path.diversity_bonus,
-                    path_memory_bonus=path.path_memory_bonus,
-                    combination_bonus=path.combination_bonus,
-                    nodes=list(path.nodes),
-                    reason=path.reason,
-                )
-            )
-        return ranked_paths
-
-    def _expand_path(
-        self,
-        *,
-        path: SearchPath,
-        skill_name: str,
-        seed_prompt: str,
-        prompt_bucket: str,
-        risk_type: str,
-        search_pool: list[str],
-        memory_store,
-        version_manager,
-        registry,
-    ) -> SearchPath | None:
-        """Extend one partial path by one more skill selection."""
-        spec = registry.get(skill_name) if registry is not None else None
-        if spec is not None and spec.status != "active":
-            return None
-
-        existing_specs = [
-            registry.get(existing_name)
-            for existing_name in path.skill_names
-            if registry is not None and existing_name in registry.names()
-        ]
-        compatibility_bonus = self._compatibility_bonus(existing_specs, spec)
-        if compatibility_bonus <= -0.5:
-            return None
-
-        node = self._score_node(
-            seed_prompt=seed_prompt,
-            prompt_bucket=prompt_bucket,
-            risk_type=risk_type,
-            skill_name=skill_name,
-            step_index=len(path.nodes),
-            search_pool=search_pool,
-            memory_store=memory_store,
-            version_manager=version_manager,
-            registry=registry,
-        )
-        if node is None:
-            return None
-
-        new_skill_names = list(path.skill_names) + [skill_name]
-        path_memory_bonus, combination_bonus = self._path_history_bonuses(
-            risk_type=risk_type,
-            skill_names=new_skill_names,
-            memory_store=memory_store,
-        )
-        diversity_bonus = self._path_diversity_bonus(new_skill_names)
-        total_score = (
-            sum(existing_node.score for existing_node in path.nodes)
-            + node.score
-            + compatibility_bonus
-            + path_memory_bonus
-            + combination_bonus
-            + diversity_bonus
-        )
-        return SearchPath(
-            path_id="draft",
-            skill_names=new_skill_names,
-            total_score=total_score,
-            prompt_bucket=prompt_bucket,
-            risk_type=risk_type,
-            diversity_bonus=diversity_bonus,
-            path_memory_bonus=path_memory_bonus,
-            combination_bonus=combination_bonus + compatibility_bonus,
-            nodes=list(path.nodes) + [node],
-            reason=(
-                f"Path {new_skill_names} scored with path_memory={path_memory_bonus:.2f}, "
-                f"combination={combination_bonus + compatibility_bonus:.2f}, "
-                f"diversity={diversity_bonus:.2f}."
-            ),
-        )
 
     def _score_node(
         self,
@@ -331,7 +225,7 @@ class SearchSkillSelector:
         )
         attempts = int(cell.get("attempts", 0))
         asr = float(cell.get("asr", 0.0))
-        avg_overall = float(cell.get("avg_overall_score", 0.0))
+        avg_overall = 0.0
         ucb_bonus = float(cell.get("ucb_score", 0.0))
         if attempts <= 0:
             ucb_bonus = self.exploration_weight * math.sqrt(
@@ -402,57 +296,6 @@ class SearchSkillSelector:
         if prompt_bucket == "safety_sensitive" and "refusal_score" in focus:
             bonus += 0.01
         return bonus
-
-    def _compatibility_bonus(self, existing_specs: list[Any], new_spec: Any) -> float:
-        """Score whether a new skill fits naturally after the existing path."""
-        if new_spec is None or not existing_specs:
-            return 0.0
-
-        bonus = 0.0
-        prior_spec = existing_specs[-1]
-        prior_compatible = set(prior_spec.composition.get("compatible_families", []))
-        new_compatible = set(new_spec.composition.get("compatible_families", []))
-        prior_conflicts = set(prior_spec.composition.get("conflicts_with", []))
-        new_conflicts = set(new_spec.composition.get("conflicts_with", []))
-
-        if new_spec.family in prior_conflicts or prior_spec.family in new_conflicts:
-            return -1.0
-        if new_spec.family in prior_compatible:
-            bonus += 0.05
-        if prior_spec.family in new_compatible:
-            bonus += 0.04
-        if new_spec.family == prior_spec.family:
-            bonus -= 0.06
-        return bonus
-
-    def _path_history_bonuses(
-        self,
-        *,
-        risk_type: str,
-        skill_names: list[str],
-        memory_store,
-    ) -> tuple[float, float]:
-        """Score path-level and family-combination priors from memory."""
-        path_cell = memory_store.get_path_cell(risk_type, skill_names)
-        path_bonus = (
-            0.18 * float(path_cell.get("asr", 0.0))
-            + 0.08 * float(path_cell.get("avg_overall_score", 0.0))
-        )
-
-        combination_cell = memory_store.get_family_combination_cell(risk_type, skill_names)
-        combination_bonus = (
-            0.10 * float(combination_cell.get("asr", 0.0))
-            + 0.05 * float(combination_cell.get("avg_overall_score", 0.0))
-        )
-        return path_bonus, combination_bonus
-
-    def _path_diversity_bonus(self, skill_names: list[str]) -> float:
-        """Reward paths that avoid redundant repetition."""
-        if not skill_names:
-            return 0.0
-        unique_ratio = len(set(skill_names)) / len(skill_names)
-        repeated_count = len(skill_names) - len(set(skill_names))
-        return 0.05 * unique_ratio - 0.03 * repeated_count
 
     def _version_bonus(self, version: str) -> float:
         """Give a small preference to promoted versions without overpowering exploration."""

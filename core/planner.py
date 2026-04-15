@@ -58,14 +58,7 @@ class RuleBasedPlanner:
                     args={
                         "mode": "search",
                         "search_pool": basic.get_group("search"),
-                        "path_count": int(
-                            basic.get_policy(
-                                "path_count",
-                                basic.get_policy("selected_skill_count", 1),
-                            )
-                        ),
-                        "path_length": int(basic.get_policy("path_length", 2)),
-                        "beam_width": int(basic.get_policy("beam_width", 2)),
+                        "selected_skill_count": 1,
                         "exploration_weight": float(basic.get_policy("exploration_weight", 0.45)),
                     },
                     reason="Search stage chooses one structured search action over the available skill space.",
@@ -143,9 +136,7 @@ class RuleBasedPlanner:
                     args={
                         "mode": "post_escalation",
                         "search_pool": search_pool,
-                        "path_count": 1,
-                        "path_length": 1,
-                        "beam_width": 1,
+                        "selected_skill_count": 1,
                         "exploration_weight": float(basic.get_policy("exploration_weight", 0.45)),
                     },
                     reason="Return from escalation with one focused search action.",
@@ -342,14 +333,7 @@ class LLMPlanner(RuleBasedPlanner):
                     "select_search_paths": {
                         "mode": "search",
                         "search_pool": basic.get_group("search"),
-                        "path_count": int(
-                            basic.get_policy(
-                                "path_count",
-                                basic.get_policy("selected_skill_count", 1),
-                            )
-                        ),
-                        "path_length": int(basic.get_policy("path_length", 2)),
-                        "beam_width": int(basic.get_policy("beam_width", 2)),
+                        "selected_skill_count": 1,
                         "exploration_weight": float(basic.get_policy("exploration_weight", 0.45)),
                     },
                     "stop": {},
@@ -398,9 +382,7 @@ class LLMPlanner(RuleBasedPlanner):
                     "select_search_paths": {
                         "mode": "post_escalation",
                         "search_pool": escalation.get_group("return_search") or basic.get_group("search"),
-                        "path_count": 1,
-                        "path_length": 1,
-                        "beam_width": 1,
+                        "selected_skill_count": 1,
                         "exploration_weight": float(basic.get_policy("exploration_weight", 0.45)),
                     },
                     "stop": {},
@@ -453,7 +435,7 @@ class LLMPlanner(RuleBasedPlanner):
                             {
                                 "action_type": "select_search_paths",
                                 "target": None,
-                                "args": {"search_pool": ["toy-persona"], "path_count": 1},
+                                "args": {"search_pool": ["toy-persona"], "selected_skill_count": 1},
                                 "reason": "why this step is appropriate now"
                             }
                         ]
@@ -598,8 +580,10 @@ class LLMPlanner(RuleBasedPlanner):
                     raise ValueError(
                         f"select_search_paths returned a search pool outside the allowed set: {search_pool}"
                     )
-                for key in ("path_count", "path_length", "beam_width"):
-                    merged_args[key] = max(int(merged_args.get(key, 1)), 1)
+                merged_args["selected_skill_count"] = 1
+                merged_args.pop("path_count", None)
+                merged_args.pop("path_length", None)
+                merged_args.pop("beam_width", None)
                 merged_args["exploration_weight"] = float(merged_args.get("exploration_weight", 0.45))
 
             validated.append(

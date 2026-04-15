@@ -2,7 +2,7 @@
 name: memory-summarize
 description: Summarize recent memory entries for harmless workflow escalation.
 metadata:
-  version: 0.1.0
+  version: "1.0"
 ---
 
 # memory-summarize
@@ -39,7 +39,7 @@ parameters_schema:
   required: []
 retrieval_hints:
   lexical_triggers: [memory, summary, recent]
-  memory_keys: [recent_memory, matrix, skill_counts, bucket_counts]
+  memory_keys: [recent_memory, risk_matrix, skill_counts, recent_risk_types]
   prompt_buckets: [general]
 composition:
   compatible_families: [retrieval-analysis]

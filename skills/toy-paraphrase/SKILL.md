@@ -2,7 +2,7 @@
 name: toy-paraphrase
 description: Harmless paraphrase generator for toy candidate search.
 metadata:
-  version: 0.1.0
+  version: "1.0"
 ---
 
 # toy-paraphrase
@@ -40,7 +40,7 @@ parameters_schema:
   required: []
 retrieval_hints:
   lexical_triggers: [rewrite, rephrase, paraphrase, restate, plain-language, summary]
-  memory_keys: [recent_skill_names, toy-paraphrase, avg_usefulness_score]
+  memory_keys: [recent_skill_names, risk_matrix, toy-paraphrase]
   prompt_buckets: [rewrite_request, educational_explanation]
 composition:
   compatible_families: [toy-persona, toy-encoding]
