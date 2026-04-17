@@ -117,43 +117,46 @@ def base_context() -> dict[str, Any]:
     }
 
 
-def test_memory_summarize_emits_structured_report() -> None:
-    """memory-summarize should emit selector and meta-skill context."""
+def test_memory_summarize_emits_combined_failure_report() -> None:
+    """memory-summarize should emit the combined failure-analysis report."""
     result = run_skill(
         PROJECT_ROOT / "skills" / "memory-summarize" / "scripts" / "run.py",
         base_context(),
     )
 
-    report = result["artifacts"]["memory_report"]
+    report = result["artifacts"]["failure_analysis_report"]
 
-    assert report["schema_version"] == "1"
+    assert report["schema_version"] == "2"
     assert report["recent_outcomes"]["success_rate"] == 0.5
-    assert report["risk_matrix_summary"]["current_risk_type"] == "benign_helpful"
-    assert "rewrite-language" in report["selector_context"]["best_skills"]
+    assert report["matrix_analysis"]["current_risk_type"] == "benign_helpful"
+    assert report["failure_examples"]
+    assert "rewrite-language" in report["selector_context"]["recommended_skills"]
     assert "rewrite-emoji" in report["selector_context"]["avoid_skills"]
     assert "rewrite-emoji" in report["meta_skill_context"]["candidate_skills_for_refinement"]
+    assert report["planner_decision"]["recommended_action"] == "refine-skill"
     assert "memory_summary_report" in result["artifacts"]
 
 
-def test_retrieval_analysis_consumes_memory_report_for_meta_context() -> None:
-    """retrieval-analysis should use memory report and matrix for downstream contexts."""
+def test_memory_summarize_produces_discover_signal_when_coverage_is_poor() -> None:
+    """The combined analysis should recommend discover when no strong skills exist."""
     context = base_context()
-    memory_result = run_skill(
+    context["extra"]["memory_matrix"]["benign_helpful"] = {
+        "rewrite-emoji@1.0": {
+            "attempts": 4,
+            "successes": 0,
+            "asr": 0.0,
+            "avg_refusal_score": 0.85,
+            "avg_response_risk_score": 0.20,
+            "ucb_score": 0.10,
+        }
+    }
+    result = run_skill(
         PROJECT_ROOT / "skills" / "memory-summarize" / "scripts" / "run.py",
         context,
     )
-    context["extra"]["artifacts"] = {
-        "memory-summarize": memory_result["artifacts"],
+    report = result["artifacts"]["failure_analysis_report"]
+
+    assert report["planner_decision"]["recommended_action"] == "discover-skill"
+    assert "skill_coverage_gap" in {
+        category["name"] for category in report["failure_categories"]
     }
-
-    result = run_skill(
-        PROJECT_ROOT / "skills" / "retrieval-analysis" / "scripts" / "run.py",
-        context,
-    )
-    artifacts = result["artifacts"]
-
-    assert artifacts["analysis_report"]["source_reports"]["has_memory_report"] is True
-    assert "rewrite-language" in artifacts["selector_context"]["recommended_skills"]
-    assert "rewrite-emoji" in artifacts["selector_context"]["avoid_skills"]
-    assert "rewrite-emoji" in artifacts["meta_skill_context"]["candidate_skills_for_refinement"]
-    assert artifacts["meta_skill_context"]["failure_patterns"]["top_tags"]

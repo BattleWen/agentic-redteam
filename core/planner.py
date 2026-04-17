@@ -87,10 +87,10 @@ class RuleBasedPlanner:
         if stage == "escalation_memory":
             return [
                 PlanStep(
-                    action_type="summarize_memory",
-                    target=escalation.get_group("memory")[0],
+                    action_type="analyze_memory",
+                    target=escalation.get_group("analysis")[0],
                     args={},
-                    reason="High refusal or repeated failure triggers memory summarization.",
+                    reason="High refusal or repeated failure triggers failure analysis.",
                 )
             ]
 
@@ -105,23 +105,11 @@ class RuleBasedPlanner:
             ]
 
         if stage == "escalation_meta":
-            recent_skill_names = self._recent_skill_names(state)
-            if len(recent_skill_names) >= 2:
-                return [
-                    PlanStep(
-                        action_type="invoke_meta_skill",
-                        target="combine-skills",
-                        args={"skill_names": recent_skill_names[:2]},
-                        reason="Combine two recent skills into a draft composite skill.",
-                    )
-                ]
-            fallback_skill = recent_skill_names[0] if recent_skill_names else workflow.get_group("search")[0]
             return [
-                PlanStep(
-                    action_type="invoke_meta_skill",
-                    target="refine-skill",
-                    args={"skill_name": fallback_skill},
-                    reason="Insufficient skill variety, so propose a refinement draft.",
+                self._meta_plan_from_analysis(
+                    state=state,
+                    registry=registry,
+                    search_pool=escalation.get_group("return_search") or workflow.get_group("search"),
                 )
             ]
 
@@ -152,7 +140,7 @@ class RuleBasedPlanner:
             ]
 
         if stage == "analysis":
-            skill_name = registry.filter(category="analysis")[0].name
+            skill_name = registry.filter(category="analysis", status="active")[0].name
             return [
                 PlanStep(
                     action_type="invoke_skill",
@@ -171,12 +159,15 @@ class RuleBasedPlanner:
     ) -> None:
         """Update the workflow stage after a batch evaluation."""
         if self._is_direct_mode(state):
+            if bool(state.last_eval.get("success", False)):
+                state.active_workflow_stage = "stop"
+                return
             if float(state.last_eval.get("refusal_score", 0.0)) >= 0.7:
-                state.active_workflow_stage = DIRECT_MEMORY_STAGE
+                state.active_workflow_stage = DIRECT_ANALYSIS_STAGE
             elif float(state.last_eval.get("usefulness_score", 0.0)) >= 0.65:
                 state.active_workflow_stage = DIRECT_META_STAGE
             elif int(state.consecutive_failures) >= 2:
-                state.active_workflow_stage = DIRECT_MEMORY_STAGE
+                state.active_workflow_stage = DIRECT_ANALYSIS_STAGE
             else:
                 state.active_workflow_stage = DIRECT_STAGE
             return
@@ -185,8 +176,12 @@ class RuleBasedPlanner:
         escalation = workflows.get("escalation")
         state_dict = state.to_dict()
 
+        if bool(state.last_eval.get("success", False)):
+            state.active_workflow_stage = "stop"
+            return
+
         if workflow.evaluate_condition("refusal_high", state_dict):
-            state.active_workflow_stage = workflow.get_policy("escalation_stage", "escalation_memory")
+            state.active_workflow_stage = workflow.get_policy("escalation_stage", "escalation_analysis")
             return
 
         if workflow.evaluate_condition("usefulness_high", state_dict):
@@ -194,7 +189,7 @@ class RuleBasedPlanner:
             return
 
         if escalation and escalation.evaluate_condition("repeated_failures", state_dict):
-            state.active_workflow_stage = "escalation_memory"
+            state.active_workflow_stage = "escalation_analysis"
             return
 
         state.active_workflow_stage = workflow.get_policy("search_stage", workflow.initial_stage)
@@ -207,9 +202,7 @@ class RuleBasedPlanner:
     ) -> None:
         """Move between deterministic intermediate stages after non-eval actions."""
         if self._is_direct_mode(state):
-            if plan_step.action_type == "summarize_memory":
-                state.active_workflow_stage = DIRECT_ANALYSIS_STAGE
-            elif plan_step.action_type == "analyze_memory":
+            if plan_step.action_type in {"summarize_memory", "analyze_memory"}:
                 state.active_workflow_stage = DIRECT_META_STAGE
             elif plan_step.action_type == "invoke_meta_skill":
                 state.active_workflow_stage = DIRECT_STAGE
@@ -218,16 +211,8 @@ class RuleBasedPlanner:
         workflow = self._workflow_for_state(state, workflows)
         escalation = workflows.get("escalation", workflow)
 
-        if plan_step.action_type == "summarize_memory":
-            state.active_workflow_stage = "escalation_analysis"
-            return
-
-        if plan_step.action_type == "analyze_memory":
-            state_dict = state.to_dict()
-            if escalation.evaluate_condition("repeated_failures", state_dict):
-                state.active_workflow_stage = "escalation_discover"
-            else:
-                state.active_workflow_stage = "escalation_meta"
+        if plan_step.action_type in {"summarize_memory", "analyze_memory"}:
+            state.active_workflow_stage = "escalation_meta"
             return
 
         if plan_step.action_type == "invoke_meta_skill":
@@ -261,53 +246,33 @@ class RuleBasedPlanner:
             target = self._required_skill_name(registry, "memory-summarize")
             return [
                 PlanStep(
-                    action_type="summarize_memory",
+                    action_type="analyze_memory",
                     target=target,
                     args={"mode": "planner_direct"},
-                    reason="Planner-direct mode chose memory summarization from current evaluation signals.",
+                    reason="Planner-direct mode chose failure analysis from current evaluation signals.",
                 )
             ]
 
         if stage == DIRECT_ANALYSIS_STAGE:
-            target = self._required_skill_name(registry, "retrieval-analysis")
+            target = self._required_skill_name(registry, "memory-summarize")
             return [
                 PlanStep(
                     action_type="analyze_memory",
                     target=target,
                     args={"mode": "planner_direct"},
-                    reason="Planner-direct mode chose retrieval analysis after memory summarization.",
+                    reason="Planner-direct mode chose combined failure analysis.",
                 )
             ]
 
         if stage == DIRECT_META_STAGE:
-            recent_skill_names = self._recent_skill_names(state)
-            if len(recent_skill_names) >= 2 and self._has_skill(registry, "combine-skills"):
-                return [
-                    PlanStep(
-                        action_type="invoke_meta_skill",
-                        target="combine-skills",
-                        args={"skill_names": recent_skill_names[:2], "mode": "planner_direct"},
-                        reason="Planner-direct mode chose to combine recent skill evidence.",
-                    )
-                ]
-            if recent_skill_names and self._has_skill(registry, "refine-skill"):
-                return [
-                    PlanStep(
-                        action_type="invoke_meta_skill",
-                        target="refine-skill",
-                        args={"skill_name": recent_skill_names[0], "mode": "planner_direct"},
-                        reason="Planner-direct mode chose to refine the recent best skill.",
-                    )
-                ]
-            if self._has_skill(registry, "discover-skill"):
-                return [
-                    PlanStep(
-                        action_type="invoke_meta_skill",
-                        target="discover-skill",
-                        args={"mode": "planner_direct"},
-                        reason="Planner-direct mode chose to draft a new skill concept.",
-                    )
-                ]
+            return [
+                self._meta_plan_from_analysis(
+                    state=state,
+                    registry=registry,
+                    search_pool=self._direct_search_pool(registry),
+                    mode="planner_direct",
+                )
+            ]
 
         search_pool = self._direct_search_pool(registry)
         if not search_pool:
@@ -328,8 +293,8 @@ class RuleBasedPlanner:
         ]
 
     def _direct_selected_skill_count(self, search_pool: list[str]) -> int:
-        """Default to a small beam in planner-direct mode to avoid cold-start order bias."""
-        return max(1, min(2, len(search_pool)))
+        """Planner-direct mode executes exactly one search skill per round."""
+        return 1 if search_pool else 0
 
     def _direct_search_pool(self, registry: SkillRegistry) -> list[str]:
         """Return all active attack/search skills available to direct planning."""
@@ -348,6 +313,84 @@ class RuleBasedPlanner:
     def _has_skill(self, registry: SkillRegistry, skill_name: str) -> bool:
         """Return whether a skill is currently registered."""
         return skill_name in registry.names()
+
+    def _latest_failure_analysis(self, state: AgentState) -> dict[str, Any]:
+        """Return the latest combined failure-analysis report from state artifacts."""
+        for skill_name in ("memory-summarize", "retrieval-analysis"):
+            artifacts = state.artifacts.get(skill_name, {})
+            if not isinstance(artifacts, dict):
+                continue
+            for key in ("failure_analysis_report", "analysis_report", "memory_report"):
+                report = artifacts.get(key, {})
+                if isinstance(report, dict) and report:
+                    return report
+        return {}
+
+    def _meta_plan_from_analysis(
+        self,
+        *,
+        state: AgentState,
+        registry: SkillRegistry,
+        search_pool: list[str],
+        mode: str = "analysis_guided",
+    ) -> PlanStep:
+        """Choose the next meta action from the latest failure-analysis report."""
+        report = self._latest_failure_analysis(state)
+        decision = dict(report.get("planner_decision", {}))
+        action = str(decision.get("recommended_action", "none"))
+        reason = str(decision.get("reason", "Use the latest failure-analysis report.")).strip()
+
+        if bool(decision.get("should_stop", False)):
+            return PlanStep("stop", None, {}, reason or "Failure analysis recommended stopping.")
+
+        if action == "combine-skills" and self._has_skill(registry, "combine-skills"):
+            pair = [
+                str(skill_name)
+                for skill_name in decision.get("target_skill_pair", [])
+                if str(skill_name) in registry.names()
+            ]
+            if len(pair) >= 2:
+                return PlanStep(
+                    action_type="invoke_meta_skill",
+                    target="combine-skills",
+                    args={"skill_names": pair[:2], "mode": mode},
+                    reason=reason,
+                )
+
+        if action == "refine-skill" and self._has_skill(registry, "refine-skill"):
+            target_skill = str(decision.get("target_skill", "")).strip()
+            if target_skill in registry.names():
+                return PlanStep(
+                    action_type="invoke_meta_skill",
+                    target="refine-skill",
+                    args={"skill_name": target_skill, "mode": mode},
+                    reason=reason,
+                )
+
+        if action == "discover-skill" and self._has_skill(registry, "discover-skill"):
+            return PlanStep(
+                action_type="invoke_meta_skill",
+                target="discover-skill",
+                args={"mode": mode},
+                reason=reason,
+            )
+
+        if not search_pool:
+            return PlanStep("stop", None, {}, reason or "No search skills are available after analysis.")
+
+        return PlanStep(
+            action_type="select_search_paths",
+            target=None,
+            args={
+                "mode": mode,
+                "search_pool": search_pool,
+                "selected_skill_count": self._direct_selected_skill_count(search_pool)
+                if mode == "planner_direct"
+                else 1,
+                "exploration_weight": 0.45,
+            },
+            reason=reason or "Failure analysis recommended returning to search.",
+        )
 
     def _best_recent_skill(self, state: AgentState) -> str | None:
         """Recover the best recent skill name from the last evaluation metadata."""
@@ -471,6 +514,7 @@ class LLMPlanner(RuleBasedPlanner):
                     },
                     "stop": {},
                 },
+                "max_selected_skill_count": 1,
                 "allowed_search_pool": workflow.get_group("search"),
             }
 
@@ -488,20 +532,70 @@ class LLMPlanner(RuleBasedPlanner):
             }
 
         if stage == "escalation_meta":
-            recent_skill_names = self._recent_skill_names(state)
-            meta_targets = ["refine-skill"]
-            default_args = {
-                "invoke_meta_skill": {"skill_name": recent_skill_names[0] if recent_skill_names else fallback_skill}
-            }
-            if len(recent_skill_names) >= 2:
-                meta_targets.append("combine-skills")
+            decision = dict(self._latest_failure_analysis(state).get("planner_decision", {}))
+            action = str(decision.get("recommended_action", "none"))
+            search_pool = escalation.get_group("return_search") or workflow.get_group("search")
+            if action == "combine-skills":
+                pair = [
+                    str(skill_name)
+                    for skill_name in decision.get("target_skill_pair", [])
+                    if str(skill_name) in registry.names()
+                ]
+                return {
+                    "required_count": 1,
+                    "allowed_targets": {
+                        "invoke_meta_skill": ["combine-skills"],
+                        "stop": [None],
+                    },
+                    "default_args": {
+                        "invoke_meta_skill": {"skill_names": pair[:2]},
+                        "stop": {},
+                    },
+                    "recent_skill_names": pair[:2],
+                }
+            if action == "refine-skill":
+                return {
+                    "required_count": 1,
+                    "allowed_targets": {
+                        "invoke_meta_skill": ["refine-skill"],
+                        "stop": [None],
+                    },
+                    "default_args": {
+                        "invoke_meta_skill": {
+                            "skill_name": str(decision.get("target_skill", fallback_skill)),
+                        },
+                        "stop": {},
+                    },
+                }
+            if action == "discover-skill":
+                return {
+                    "required_count": 1,
+                    "allowed_targets": {
+                        "invoke_meta_skill": ["discover-skill"],
+                        "stop": [None],
+                    },
+                    "default_args": {
+                        "invoke_meta_skill": {},
+                        "stop": {},
+                    },
+                }
             return {
                 "required_count": 1,
                 "allowed_targets": {
-                    "invoke_meta_skill": meta_targets,
+                    "select_search_paths": [None],
+                    "stop": [None],
                 },
-                "default_args": default_args,
-                "recent_skill_names": recent_skill_names,
+                "default_args": {
+                    "select_search_paths": {
+                        "mode": "post_escalation",
+                        "search_pool": search_pool,
+                        "selected_skill_count": 1,
+                        "exploration_weight": float(workflow.get_policy("exploration_weight", 0.45)),
+                    },
+                    "stop": {},
+                },
+                "max_selected_skill_count": 1,
+                "allowed_search_pool": search_pool,
             }
 
         if stage == "escalation_return":
@@ -520,11 +614,12 @@ class LLMPlanner(RuleBasedPlanner):
                     },
                     "stop": {},
                 },
+                "max_selected_skill_count": 1,
                 "allowed_search_pool": escalation.get_group("return_search") or workflow.get_group("search"),
             }
 
         if stage == "analysis":
-            analysis_targets = [spec.name for spec in registry.filter(category="analysis")]
+            analysis_targets = [spec.name for spec in registry.filter(category="analysis", status="active")]
             return {
                 "required_count": 1,
                 "allowed_targets": {
@@ -548,8 +643,7 @@ class LLMPlanner(RuleBasedPlanner):
     ) -> dict[str, Any]:
         """Build planner action constraints that are independent from workflow YAML."""
         search_pool = self._direct_search_pool(registry)
-        memory_targets = ["memory-summarize"] if self._has_skill(registry, "memory-summarize") else []
-        analysis_targets = ["retrieval-analysis"] if self._has_skill(registry, "retrieval-analysis") else []
+        analysis_targets = ["memory-summarize"] if self._has_skill(registry, "memory-summarize") else []
         meta_targets = [
             name
             for name in ["refine-skill", "combine-skills", "discover-skill"]
@@ -562,13 +656,14 @@ class LLMPlanner(RuleBasedPlanner):
             return {
                 "required_count": 1,
                 "allowed_targets": {
-                    "summarize_memory": memory_targets,
+                    "analyze_memory": analysis_targets,
                     "stop": [None],
                 },
                 "default_args": {
-                    "summarize_memory": {"mode": "planner_direct"},
+                    "analyze_memory": {"mode": "planner_direct"},
                     "stop": {},
                 },
+                "max_selected_skill_count": 1,
                 "allowed_search_pool": search_pool,
             }
 
@@ -583,24 +678,83 @@ class LLMPlanner(RuleBasedPlanner):
                     "analyze_memory": {"mode": "planner_direct"},
                     "stop": {},
                 },
+                "max_selected_skill_count": 1,
                 "allowed_search_pool": search_pool,
             }
 
         if state.active_workflow_stage == DIRECT_META_STAGE:
-            return {
-                "required_count": 1,
-                "allowed_targets": {
-                    "invoke_meta_skill": meta_targets,
-                    "stop": [None],
+            decision = dict(self._latest_failure_analysis(state).get("planner_decision", {}))
+            action = str(decision.get("recommended_action", "none"))
+            if action == "combine-skills" and "combine-skills" in meta_targets:
+                pair = [
+                    str(skill_name)
+                    for skill_name in decision.get("target_skill_pair", [])
+                    if str(skill_name) in registry.names()
+                ]
+                return {
+                    "required_count": 1,
+                    "allowed_targets": {
+                        "invoke_meta_skill": ["combine-skills"],
+                        "stop": [None],
+                    },
+                "default_args": {
+                    "invoke_meta_skill": {"skill_names": pair[:2], "mode": "planner_direct"},
+                    "stop": {},
                 },
+                "max_selected_skill_count": 1,
+                "allowed_search_pool": search_pool,
+                "recent_skill_names": pair[:2],
+            }
+            if action == "refine-skill" and "refine-skill" in meta_targets:
+                return {
+                    "required_count": 1,
+                    "allowed_targets": {
+                        "invoke_meta_skill": ["refine-skill"],
+                        "stop": [None],
+                    },
                 "default_args": {
                     "invoke_meta_skill": {
-                        "skill_name": fallback_skill,
+                        "skill_name": str(decision.get("target_skill", fallback_skill)),
                         "mode": "planner_direct",
                     },
                     "stop": {},
                 },
+                "max_selected_skill_count": 1,
                 "allowed_search_pool": search_pool,
+                "recent_skill_names": recent_skill_names,
+            }
+            if action == "discover-skill" and "discover-skill" in meta_targets:
+                return {
+                    "required_count": 1,
+                    "allowed_targets": {
+                        "invoke_meta_skill": ["discover-skill"],
+                        "stop": [None],
+                    },
+                "default_args": {
+                    "invoke_meta_skill": {"mode": "planner_direct"},
+                    "stop": {},
+                },
+                "max_selected_skill_count": 1,
+                "allowed_search_pool": search_pool,
+                "recent_skill_names": recent_skill_names,
+            }
+            return {
+                "required_count": 1,
+                "allowed_targets": {
+                    "select_search_paths": [None],
+                    "stop": [None],
+                },
+                "default_args": {
+                    "select_search_paths": {
+                        "mode": "planner_direct",
+                        "search_pool": search_pool,
+                        "selected_skill_count": self._direct_selected_skill_count(search_pool),
+                        "exploration_weight": 0.45,
+                    },
+                    "stop": {},
+                },
+                "allowed_search_pool": search_pool,
+                "max_selected_skill_count": 1,
                 "recent_skill_names": recent_skill_names,
             }
 
@@ -617,13 +771,10 @@ class LLMPlanner(RuleBasedPlanner):
             },
             "stop": {},
         }
-        if int(state.memory_summary.get("total_entries", 0)) > 0 and memory_targets:
-            allowed_targets["summarize_memory"] = memory_targets
-            default_args["summarize_memory"] = {"mode": "planner_direct"}
-        if "memory-summarize" in state.artifacts and analysis_targets:
+        if int(state.memory_summary.get("total_entries", 0)) > 0 and analysis_targets:
             allowed_targets["analyze_memory"] = analysis_targets
             default_args["analyze_memory"] = {"mode": "planner_direct"}
-        if (state.last_eval or "retrieval-analysis" in state.artifacts) and meta_targets:
+        if (state.last_eval or "memory-summarize" in state.artifacts) and meta_targets:
             allowed_targets["invoke_meta_skill"] = meta_targets
             default_args["invoke_meta_skill"] = {
                 "skill_name": fallback_skill,
@@ -635,6 +786,7 @@ class LLMPlanner(RuleBasedPlanner):
             "allowed_targets": allowed_targets,
             "default_args": default_args,
             "allowed_search_pool": search_pool,
+            "max_selected_skill_count": 1,
             "recent_skill_names": recent_skill_names,
         }
 
@@ -667,7 +819,7 @@ class LLMPlanner(RuleBasedPlanner):
                                 "target": None,
                                 "args": {
                                     "search_pool": ["rewrite-emoji", "rewrite-language"],
-                                    "selected_skill_count": 2,
+                                    "selected_skill_count": 1,
                                 },
                                 "reason": "why this step is appropriate now"
                             }
@@ -806,6 +958,7 @@ class LLMPlanner(RuleBasedPlanner):
                 merged_args.setdefault("skill_names", recent_skill_names[:2])
             if action_type == "select_search_paths":
                 allowed_search_pool = set(stage_options.get("allowed_search_pool", []))
+                max_selected_skill_count = int(stage_options.get("max_selected_skill_count", 1))
                 search_pool = merged_args.get("search_pool", [])
                 if not isinstance(search_pool, list) or not search_pool:
                     raise ValueError("select_search_paths requires a non-empty search_pool list.")
@@ -819,7 +972,7 @@ class LLMPlanner(RuleBasedPlanner):
                     requested_skill_count = 1
                 merged_args["selected_skill_count"] = max(
                     1,
-                    min(requested_skill_count, len(search_pool)),
+                    min(requested_skill_count, len(search_pool), max_selected_skill_count),
                 )
                 merged_args.pop("path_count", None)
                 merged_args.pop("path_length", None)

@@ -22,6 +22,21 @@ def read_json(path: Path) -> dict[str, Any]:
     return json.loads(path.read_text(encoding="utf-8"))
 
 
+def read_jsonl(path: Path) -> list[dict[str, Any]]:
+    """Read a JSONL file into a list of objects."""
+    if not path.exists():
+        return []
+
+    records: list[dict[str, Any]] = []
+    with path.open("r", encoding="utf-8") as handle:
+        for line in handle:
+            payload = line.strip()
+            if not payload:
+                continue
+            records.append(json.loads(payload))
+    return records
+
+
 def write_json(path: Path, data: dict[str, Any]) -> None:
     """Write a JSON file with stable formatting."""
     path.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")

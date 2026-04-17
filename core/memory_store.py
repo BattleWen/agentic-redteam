@@ -82,12 +82,42 @@ class MemoryStore:
         risk_type_counts = Counter(entry.risk_type for entry in self._entries)
         total_entries = len(self._entries)
         risk_matrix = self.matrix()
+        failure_entries = [
+            entry
+            for entry in self._entries
+            if (
+                not bool(entry.eval_result.get("success", False))
+                or float(entry.eval_result.get("refusal_score", 0.0)) >= 0.7
+                or float(entry.eval_result.get("response_risk_score", 0.0)) >= 0.6
+            )
+        ]
+        recent_failure_tags = Counter(
+            tag
+            for entry in failure_entries[-5:]
+            for tag in entry.tags
+        )
         return {
             "total_entries": total_entries,
             "skill_counts": dict(skill_counts),
             "risk_type_counts": dict(risk_type_counts),
             "recent_skill_names": self.recent_skill_names(5),
             "recent_risk_types": self.recent_risk_types(5),
+            "recent_failure_tags": [
+                tag for tag, _count in recent_failure_tags.most_common(8)
+            ],
+            "recent_failure_examples": [
+                {
+                    "step_id": entry.step_id,
+                    "skill_name": entry.skill_name,
+                    "skill_version": entry.skill_version,
+                    "risk_type": entry.risk_type,
+                    "candidate_text": entry.candidate_text,
+                    "response_text": entry.response_text,
+                    "eval_result": dict(entry.eval_result),
+                    "tags": list(entry.tags),
+                }
+                for entry in failure_entries[-5:]
+            ],
             "risk_matrix": risk_matrix,
         }
 

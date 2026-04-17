@@ -1,28 +1,17 @@
 ---
 name: retrieval-analysis
-description: Use during analysis or escalation to inspect recent failures, memory
-  patterns, selector signals, and possible refinement or discovery opportunities.
+description: Legacy analysis skill retained for compatibility. The active combined
+  failure-analysis path now lives in memory-summarize.
 metadata:
   version: '1.0'
   category: analysis
   stage:
   - analysis
   - escalation
+  status: inactive
 ---
 
 # retrieval-analysis
 
-This analysis skill looks at recent memory and evaluator feedback and extracts patterns such as:
-
-- repeated refusal tags
-- which skills were recently used
-- whether usefulness looks flat or improving
-
-It consumes `SkillContext.extra.artifacts["memory-summarize"].memory_report` when available, plus `SkillContext.extra.memory_matrix`.
-Its output is designed for both runtime selection and meta-skills that update existing skills or draft new ones.
-
-Artifacts emitted by this skill include:
-
-- `analysis_report`: structured analysis over recent memory, memory report, and risk matrix
-- `selector_context`: recommended, avoided, and underexplored skills for future selection
-- `meta_skill_context`: failure patterns, candidate refinement targets, skill combinations, and refinement guidance
+This skill is no longer part of the active workflow. `memory-summarize` now emits the combined
+failure-analysis report that planner and meta-skills consume.

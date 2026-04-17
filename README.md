@@ -89,10 +89,7 @@ python main.py \
 
 The run writes artifacts to `runs/<run_id>/`:
 
-- `state_trace.jsonl`
-- `skill_calls.jsonl`
-- `environment_calls.jsonl`
-- `evals.jsonl`
+- `compact_trace.json`
 - `final_summary.json`
 
 ## Remote Planner Backend
@@ -136,7 +133,7 @@ Each skill directory contains:
 
 The runtime builds its skill registry from `SKILL.md` frontmatter plus the markdown-body `Runtime Metadata` YAML block. The LLM planner receives only compact, stage-scoped skill cards; full `SKILL.md` content is read lazily after a skill is selected.
 
-Skill versions are maintained centrally in `state/skill_versions.json`. Each skill keeps only an active version and an optional previous version for one-step rollback; runtime events are appended to `state/version_events.jsonl` and per-run traces.
+Skill versions are maintained centrally in `state/skill_versions.json`. Each skill keeps only an active version and an optional previous version for one-step rollback; runtime events are appended to `state/version_events.jsonl`, while run outputs are summarized into `compact_trace.json`.
 
 All `scripts/run.py` files must:
 

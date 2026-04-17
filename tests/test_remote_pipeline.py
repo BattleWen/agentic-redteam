@@ -46,7 +46,9 @@ def test_remote_pipeline_runs_when_explicitly_enabled(tmp_path: Path) -> None:
     )
 
     run_dir = Path(summary["generated_run_dir"])
-    final_summary = json.loads((run_dir / "final_summary.json").read_text(encoding="utf-8"))
-    assert final_summary["run_id"] == summary["run_id"]
-    assert (run_dir / "state_trace.jsonl").exists()
-    assert (run_dir / "selection_calls.jsonl").exists()
+    compact_trace = json.loads((run_dir / "compact_trace.json").read_text(encoding="utf-8"))
+    assert compact_trace["run_id"] == summary["run_id"]
+    assert (run_dir / "compact_trace.json").exists()
+    assert (run_dir / "final_summary.json").exists()
+    assert not (run_dir / "state_trace.jsonl").exists()
+    assert not (run_dir / "selection_calls.jsonl").exists()

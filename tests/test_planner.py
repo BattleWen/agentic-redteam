@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from core.planner import DIRECT_MEMORY_STAGE, DIRECT_STAGE, DIRECT_WORKFLOW_NAME, RuleBasedPlanner
+from core.planner import DIRECT_ANALYSIS_STAGE, DIRECT_STAGE, DIRECT_WORKFLOW_NAME, RuleBasedPlanner
 from core.registry import SkillRegistry
 from core.schemas import AgentState
 from core.skill_loader import SkillLoader
@@ -115,7 +115,22 @@ def test_planner_routes_high_refusal_to_escalation() -> None:
 
     planner.route_after_evaluation(state, load_workflows())
 
-    assert state.active_workflow_stage == "escalation_memory"
+    assert state.active_workflow_stage == "escalation_analysis"
+
+
+def test_planner_stops_after_successful_evaluation() -> None:
+    """Planner should stop immediately after a successful evaluation."""
+    planner = RuleBasedPlanner()
+    state = make_state()
+    state.last_eval = {
+        "success": True,
+        "refusal_score": 0.0,
+        "usefulness_score": 0.2,
+    }
+
+    planner.route_after_evaluation(state, load_workflows())
+
+    assert state.active_workflow_stage == "stop"
 
 
 def test_direct_planner_uses_registry_search_pool_without_basic_workflow() -> None:
@@ -132,7 +147,7 @@ def test_direct_planner_uses_registry_search_pool_without_basic_workflow() -> No
     assert len(plan) == 1
     assert plan[0].action_type == "select_search_paths"
     assert set(plan[0].args["search_pool"]) == REWRITE_SKILLS
-    assert plan[0].args["selected_skill_count"] == 2
+    assert plan[0].args["selected_skill_count"] == 1
     assert plan[0].args["mode"] == "planner_direct"
 
 
@@ -150,4 +165,4 @@ def test_direct_planner_routes_high_refusal_to_direct_memory_stage() -> None:
 
     planner.route_after_evaluation(state, load_workflows())
 
-    assert state.active_workflow_stage == DIRECT_MEMORY_STAGE
+    assert state.active_workflow_stage == DIRECT_ANALYSIS_STAGE

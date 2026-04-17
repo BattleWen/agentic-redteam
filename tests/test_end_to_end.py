@@ -68,17 +68,25 @@ def test_end_to_end_basic_workflow_runs(tmp_path: Path, monkeypatch) -> None:
     )
 
     run_dir = Path(summary["generated_run_dir"])
-    final_summary = json.loads((run_dir / "final_summary.json").read_text(encoding="utf-8"))
-    state_trace = (run_dir / "state_trace.jsonl").read_text(encoding="utf-8").strip().splitlines()
+    compact_trace = json.loads((run_dir / "compact_trace.json").read_text(encoding="utf-8"))
+    run_summary = json.loads((run_dir / "final_summary.json").read_text(encoding="utf-8"))
 
     assert summary["steps_completed"] >= 3
-    assert final_summary["run_id"] == summary["run_id"]
-    assert len(state_trace) >= 3
-    assert (run_dir / "skill_calls.jsonl").exists()
-    assert (run_dir / "selection_calls.jsonl").exists()
-    assert (run_dir / "steps.jsonl").exists()
-    assert (run_dir / "version_events.jsonl").exists()
-    assert (run_dir / "evals.jsonl").exists()
+    assert run_summary["run_id"] == summary["run_id"]
+    assert summary["compact_trace_path"] == str(run_dir / "compact_trace.json")
+    assert summary["finished_at"] == run_summary["finished_at"]
+    assert "artifacts" not in run_summary
+    assert (run_dir / "final_summary.json").exists()
+    assert (run_dir / "compact_trace.json").exists()
+    assert not (run_dir / "state_trace.jsonl").exists()
+    assert not (run_dir / "skill_calls.jsonl").exists()
+    assert not (run_dir / "selection_calls.jsonl").exists()
+    assert not (run_dir / "steps.jsonl").exists()
+    assert not (run_dir / "version_events.jsonl").exists()
+    assert not (run_dir / "evals.jsonl").exists()
+    assert compact_trace["run_id"] == summary["run_id"]
+    assert compact_trace["steps"][0]["planner"]["action_type"] == "select_search_paths"
+    assert compact_trace["steps"][0]["skill_calls"]
     assert "risk_matrix" in summary["memory_summary"]
 
 
@@ -160,10 +168,9 @@ def test_end_to_end_planner_direct_runs_without_basic_workflow(tmp_path: Path, m
     )
 
     run_dir = Path(summary["generated_run_dir"])
-    final_summary = json.loads((run_dir / "final_summary.json").read_text(encoding="utf-8"))
-    first_selection = json.loads(
-        (run_dir / "selection_calls.jsonl").read_text(encoding="utf-8").splitlines()[0]
-    )
+    compact_trace = json.loads((run_dir / "compact_trace.json").read_text(encoding="utf-8"))
+    run_summary = json.loads((run_dir / "final_summary.json").read_text(encoding="utf-8"))
+    first_selection = compact_trace["steps"][0]["planner"]["result"]
     selected_names = {
         skill_name
         for path in first_selection["selected_skills"]
@@ -171,9 +178,12 @@ def test_end_to_end_planner_direct_runs_without_basic_workflow(tmp_path: Path, m
     }
 
     assert summary["workflow"] == DIRECT_WORKFLOW_NAME
-    assert final_summary["workflow"] == DIRECT_WORKFLOW_NAME
-    assert len(selected_names) == 2
+    assert run_summary["workflow"] == DIRECT_WORKFLOW_NAME
+    assert compact_trace["workflow"] == DIRECT_WORKFLOW_NAME
+    assert (run_dir / "final_summary.json").exists()
+    assert (run_dir / "compact_trace.json").exists()
+    assert len(selected_names) == 1
     assert selected_names.issubset(REWRITE_SKILLS)
     assert "candidate_rankings" in first_selection
-    assert (run_dir / "selection_calls.jsonl").exists()
-    assert (run_dir / "evals.jsonl").exists()
+    assert not (run_dir / "selection_calls.jsonl").exists()
+    assert not (run_dir / "evals.jsonl").exists()

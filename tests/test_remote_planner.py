@@ -106,8 +106,8 @@ def test_remote_planner_falls_back_on_invalid_json(monkeypatch) -> None:
     assert state.planner_flags["planner_mode"] == "remote_fallback"
 
 
-def test_remote_planner_preserves_direct_selected_skill_count(monkeypatch) -> None:
-    """Remote planner should not collapse planner-direct search back to one skill."""
+def test_remote_planner_clamps_direct_selected_skill_count_to_one(monkeypatch) -> None:
+    """Remote planner should not allow planner-direct mode to schedule multiple skills."""
     specs = SkillLoader(PROJECT_ROOT).discover()
     registry = SkillRegistry(specs)
     planner = LLMPlanner(
@@ -129,7 +129,7 @@ def test_remote_planner_preserves_direct_selected_skill_count(monkeypatch) -> No
             '{"action_type": "select_search_paths", "target": null, '
             '"args": {"search_pool": ["rewrite-emoji", "rewrite-language"], '
             '"selected_skill_count": 2, "exploration_weight": 0.45}, '
-            '"reason": "Try both available direct rewrite skills."}'
+            '"reason": "Try direct rewrite skills."}'
             "]}"
         ),
     )
@@ -140,7 +140,7 @@ def test_remote_planner_preserves_direct_selected_skill_count(monkeypatch) -> No
     assert plan[0].action_type == "select_search_paths"
     assert set(plan[0].args["search_pool"]) == {"rewrite-emoji", "rewrite-language"}
     assert set(plan[0].args["search_pool"]).issubset(REWRITE_SKILLS)
-    assert plan[0].args["selected_skill_count"] == 2
+    assert plan[0].args["selected_skill_count"] == 1
     assert state.planner_flags["planner_backend"] == "llm"
 
 

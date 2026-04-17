@@ -13,10 +13,21 @@ def analysis_context(context: dict[str, object]) -> dict[str, object]:
     artifacts = dict(dict(context.get("extra", {})).get("artifacts", {}))
     memory_artifacts = dict(artifacts.get("memory-summarize", {}))
     retrieval_artifacts = dict(artifacts.get("retrieval-analysis", {}))
+    memory_report = dict(
+        memory_artifacts.get("failure_analysis_report")
+        or memory_artifacts.get("memory_report", {})
+    )
+    analysis_report = dict(
+        retrieval_artifacts.get("analysis_report", {})
+        or memory_artifacts.get("analysis_report", {})
+    )
+    meta_skill_context = dict(retrieval_artifacts.get("meta_skill_context", {}))
+    if not meta_skill_context:
+        meta_skill_context = dict(memory_artifacts.get("meta_skill_context", {}))
     return {
-        "memory_report": dict(memory_artifacts.get("memory_report", {})),
-        "analysis_report": dict(retrieval_artifacts.get("analysis_report", {})),
-        "meta_skill_context": dict(retrieval_artifacts.get("meta_skill_context", {})),
+        "memory_report": memory_report,
+        "analysis_report": analysis_report,
+        "meta_skill_context": meta_skill_context,
     }
 
 

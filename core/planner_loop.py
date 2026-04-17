@@ -12,10 +12,11 @@ from core.executor import SkillExecutor
 from core.memory_store import MemoryStore
 from core.planner import DIRECT_STAGE, DIRECT_WORKFLOW_NAME, LLMPlanner, RuleBasedPlanner
 from core.registry import SkillRegistry
+from core.run_report import CompactRunRecorder
 from core.schemas import AgentState, MemoryEntry, PlanStep, SkillContext, SkillExecutionResult
 from core.selector import SearchSkillSelector
 from core.skill_loader import SkillLoader
-from core.utils import append_jsonl, ensure_dir, make_run_id, read_yaml, utc_now_iso, write_json
+from core.utils import ensure_dir, make_run_id, read_yaml, utc_now_iso, write_json
 from core.versioning import SkillVersionManager
 from core.workflow import Workflow
 
@@ -83,8 +84,6 @@ class PlannerLoop:
         self.selector = SearchSkillSelector()
         self.recent_memory_window = int(self.config["defaults"].get("recent_memory_window", 5))
 
-        # import pdb; pdb.set_trace()
-
     def run(
         self,
         *,
@@ -121,10 +120,14 @@ class PlannerLoop:
             budget_remaining=budget.remaining(),
             workflow_name=resolved_workflow_name,
         )
+        recorder = CompactRunRecorder(
+            run_id=run_id,
+            workflow=resolved_workflow_name,
+            run_dir=run_dir,
+        )
 
         while budget.can_continue():
             state.budget_remaining = budget.remaining()
-            self._log_state(run_dir, state)
 
             plan_steps = self.planner.plan(state, workflows, self.registry)
             if len(plan_steps) == 1 and plan_steps[0].action_type == "stop":
@@ -136,7 +139,7 @@ class PlannerLoop:
                     state=state,
                     memory=memory,
                     budget=budget,
-                    run_dir=run_dir,
+                    recorder=recorder,
                     workflows=workflows,
                 )
                 if index < len(plan_steps) - 1:
@@ -155,7 +158,7 @@ class PlannerLoop:
 
         state.memory_summary = memory.summary()
         state.budget_remaining = budget.remaining()
-        final_summary = {
+        summary = {
             "run_id": state.run_id,
             "workflow": state.workflow_name,
             "final_stage": state.active_workflow_stage,
@@ -164,12 +167,16 @@ class PlannerLoop:
             "budget_remaining": state.budget_remaining,
             "memory_summary": state.memory_summary,
             "last_eval": state.last_eval,
-            "artifacts": state.artifacts,
             "generated_run_dir": str(run_dir),
             "finished_at": utc_now_iso(),
         }
-        write_json(run_dir / "final_summary.json", final_summary)
-        return final_summary
+        compact_trace_path = run_dir / "compact_trace.json"
+        compact_trace = recorder.build_steps_trace(summary=summary)
+        write_json(compact_trace_path, compact_trace)
+
+        summary["compact_trace_path"] = str(compact_trace_path)
+        write_json(run_dir / "final_summary.json", summary)
+        return summary
 
     def _apply_planner_enabled(self, enabled: bool) -> None:
         """Switch between the local rule planner and the configured LLM planner."""
@@ -267,7 +274,7 @@ class PlannerLoop:
         state: AgentState,
         memory: MemoryStore,
         budget: BudgetManager,
-        run_dir: Path,
+        recorder: CompactRunRecorder,
         workflows: dict[str, Workflow],
     ) -> None:
         """Dispatch one plan step."""
@@ -282,7 +289,7 @@ class PlannerLoop:
                 state.active_workflow_stage = "stop"
                 return
             prior_stage = state.active_workflow_stage
-            result = self._invoke_skill_like_step(plan_step, state, memory, budget, run_dir)
+            result = self._invoke_skill_like_step(plan_step, state, memory, budget, recorder)
             if (
                 plan_step.action_type == "invoke_meta_skill"
                 and str(plan_step.target) == "refine-skill"
@@ -291,13 +298,12 @@ class PlannerLoop:
                 workflow = workflows.get(state.workflow_name) or next(iter(workflows.values()))
                 self._apply_refinement_decision(
                     state=state,
-                    run_dir=run_dir,
                     result=result,
                     workflow=workflow,
                 )
             self.planner.advance_after_action(state, plan_step, workflows)
             self._log_step_summary(
-                run_dir=run_dir,
+                recorder=recorder,
                 state=state,
                 plan_step=plan_step,
                 stage_before=stage_before,
@@ -316,17 +322,19 @@ class PlannerLoop:
                 state=state,
                 memory=memory,
                 budget=budget,
-                run_dir=run_dir,
+                recorder=recorder,
                 plan_step=plan_step,
             )
             selection = list(state.artifacts.get("last_selection", []))
+            selection_rankings = list(state.artifacts.get("last_selection_rankings", []))
             self._log_step_summary(
-                run_dir=run_dir,
+                recorder=recorder,
                 state=state,
                 plan_step=plan_step,
                 stage_before=stage_before,
                 extra={
-                    "selected_skills": [item.get("skill_names", []) for item in selection],
+                    "selected_skills": selection,
+                    "candidate_rankings": selection_rankings,
                     "selected_skill_count": len(selection),
                 },
             )
@@ -334,9 +342,9 @@ class PlannerLoop:
 
         if plan_step.action_type == "execute_candidates":
             pending_before = len(state.pending_candidates)
-            self._execute_candidates(state, budget, run_dir)
+            self._execute_candidates(state, budget, recorder)
             self._log_step_summary(
-                run_dir=run_dir,
+                recorder=recorder,
                 state=state,
                 plan_step=plan_step,
                 stage_before=stage_before,
@@ -351,16 +359,15 @@ class PlannerLoop:
             eval_payload, skill_metrics = self._evaluate_candidates(
                 state,
                 memory,
-                run_dir,
+                recorder,
             )
             self._record_version_observations(
                 state=state,
-                run_dir=run_dir,
                 skill_metrics=skill_metrics,
             )
             self.planner.route_after_evaluation(state, workflows)
             self._log_step_summary(
-                run_dir=run_dir,
+                recorder=recorder,
                 state=state,
                 plan_step=plan_step,
                 stage_before=stage_before,
@@ -379,7 +386,7 @@ class PlannerLoop:
         if plan_step.action_type == "stop":
             state.active_workflow_stage = "stop"
             self._log_step_summary(
-                run_dir=run_dir,
+                recorder=recorder,
                 state=state,
                 plan_step=plan_step,
                 stage_before=stage_before,
@@ -395,7 +402,7 @@ class PlannerLoop:
         state: AgentState,
         memory: MemoryStore,
         budget: BudgetManager,
-        run_dir: Path,
+        recorder: CompactRunRecorder,
         plan_step,
     ) -> None:
         """Run selector search and materialize the chosen skill into pending candidates."""
@@ -424,7 +431,7 @@ class PlannerLoop:
             requested_skill_count = 1
         selected_skill_count = max(
             1,
-            min(requested_skill_count, len(search_pool), int(budget.remaining()["skill_calls"])),
+            min(requested_skill_count, 1, len(search_pool), int(budget.remaining()["skill_calls"])),
         )
         self.selector.exploration_weight = float(
             plan_step.args.get("exploration_weight", self.selector.exploration_weight)
@@ -437,8 +444,8 @@ class PlannerLoop:
             memory_store=memory,
             version_manager=self.version_manager,
             registry=self.registry,
-            path_count=len(search_pool),
-            beam_width=len(search_pool),
+            path_count=selected_skill_count,
+            beam_width=1,
             path_length=1,
         )
         paths = ranked_paths[:selected_skill_count]
@@ -452,19 +459,7 @@ class PlannerLoop:
             dict.fromkeys(skill_name for path in paths for skill_name in path.skill_names)
         )
         state.artifacts["last_selection"] = [path.to_dict() for path in paths]
-        append_jsonl(
-            run_dir / "selection_calls.jsonl",
-            {
-                "timestamp": utc_now_iso(),
-                "run_id": state.run_id,
-                "step_id": state.current_step,
-                "prompt_bucket": state.current_prompt_bucket,
-                "risk_type": state.current_risk_type,
-                "seed_prompt": state.seed_prompt,
-                "selected_skills": [path.to_dict() for path in paths],
-                "candidate_rankings": [path.to_dict() for path in ranked_paths],
-            },
-        )
+        state.artifacts["last_selection_rankings"] = [path.to_dict() for path in ranked_paths]
 
         for selection_rank, path in enumerate(paths, start=1):
             for node in path.nodes:
@@ -485,7 +480,7 @@ class PlannerLoop:
                     },
                     reason=path.reason,
                 )
-                self._invoke_skill_like_step(selected_step, state, memory, budget, run_dir)
+                self._invoke_skill_like_step(selected_step, state, memory, budget, recorder)
 
     def _invoke_skill_like_step(
         self,
@@ -493,7 +488,7 @@ class PlannerLoop:
         state: AgentState,
         memory: MemoryStore,
         budget: BudgetManager,
-        run_dir: Path,
+        recorder: CompactRunRecorder,
     ) -> SkillExecutionResult:
         """Invoke a skill or meta-skill and merge its outputs into state."""
         spec = self.registry.get(str(plan_step.target))
@@ -518,22 +513,17 @@ class PlannerLoop:
                 state.pending_candidates.append(candidate)
 
         state.artifacts[spec.name] = result.artifacts
-        append_jsonl(
-            run_dir / "skill_calls.jsonl",
-            {
-                "timestamp": utc_now_iso(),
-                "run_id": state.run_id,
-                "step_id": state.current_step,
-                "action_type": plan_step.action_type,
-                "skill_name": spec.name,
-                "plan_reason": plan_step.reason,
-                "context_summary": {
-                    "stage": state.active_workflow_stage,
-                    "prior_candidate_count": len(context.prior_candidates),
-                    "memory_total_entries": state.memory_summary.get("total_entries", 0),
-                },
-                "result": result.to_dict(),
+        recorder.record_skill_call(
+            step_id=state.current_step,
+            timestamp=utc_now_iso(),
+            skill_name=spec.name,
+            plan_reason=plan_step.reason,
+            context_summary={
+                "stage": state.active_workflow_stage,
+                "prior_candidate_count": len(context.prior_candidates),
+                "memory_total_entries": state.memory_summary.get("total_entries", 0),
             },
+            result=result.to_dict(),
         )
         return result
 
@@ -541,7 +531,7 @@ class PlannerLoop:
         self,
         state: AgentState,
         budget: BudgetManager,
-        run_dir: Path,
+        recorder: CompactRunRecorder,
     ) -> None:
         """Run pending candidates through the mock environment."""
         responses: list[dict[str, Any]] = []
@@ -556,15 +546,11 @@ class PlannerLoop:
             outcome["source_skill"] = candidate.get("source_skill")
             responses.append(outcome)
 
-            append_jsonl(
-                run_dir / "environment_calls.jsonl",
-                {
-                    "timestamp": utc_now_iso(),
-                    "run_id": state.run_id,
-                    "step_id": state.current_step,
-                    "candidate": candidate,
-                    "environment_result": outcome,
-                },
+            recorder.record_environment_call(
+                step_id=state.current_step,
+                timestamp=utc_now_iso(),
+                candidate=candidate,
+                result=outcome,
             )
 
         state.last_responses = responses
@@ -573,7 +559,7 @@ class PlannerLoop:
         self,
         state: AgentState,
         memory: MemoryStore,
-        run_dir: Path,
+        recorder: CompactRunRecorder,
     ) -> tuple[
         dict[str, Any],
         dict[tuple[str, str], dict[str, Any]],
@@ -655,14 +641,10 @@ class PlannerLoop:
             )
 
         skill_metrics = self._aggregate_skill_metrics(state.pending_candidates, eval_payload)
-        append_jsonl(
-            run_dir / "evals.jsonl",
-            {
-                "timestamp": utc_now_iso(),
-                "run_id": state.run_id,
-                "step_id": state.current_step,
-                "eval_result": eval_payload,
-            },
+        recorder.record_evaluation(
+            step_id=state.current_step,
+            timestamp=utc_now_iso(),
+            result=eval_payload,
         )
 
         state.pending_candidates = []
@@ -719,7 +701,6 @@ class PlannerLoop:
         self,
         *,
         state: AgentState,
-        run_dir: Path,
         skill_metrics: dict[tuple[str, str], dict[str, Any]],
     ) -> None:
         """Record observed metrics so later refine actions can decide about promotion."""
@@ -735,14 +716,12 @@ class PlannerLoop:
                 run_id=state.run_id,
                 step_id=state.current_step,
             )
-            append_jsonl(run_dir / "version_events.jsonl", event)
             state.artifacts.setdefault("version_events", []).append(event)
 
     def _apply_refinement_decision(
         self,
         *,
         state: AgentState,
-        run_dir: Path,
         result: SkillExecutionResult,
         workflow: Workflow,
     ) -> None:
@@ -768,7 +747,6 @@ class PlannerLoop:
             version_bump=self._version_bump_from_artifact(dict(result.artifacts)),
         )
         state.artifacts.setdefault("version_events", []).append(event)
-        append_jsonl(run_dir / "version_events.jsonl", event)
 
     def _version_bump_from_artifact(self, artifact: dict[str, Any]) -> str:
         """Read the requested version bump from a draft artifact."""
@@ -835,16 +813,6 @@ class PlannerLoop:
         spec = self.registry.get(skill_name)
         return (Path(spec.root_dir) / "SKILL.md").read_text(encoding="utf-8")
 
-    def _log_state(self, run_dir: Path, state: AgentState) -> None:
-        """Append one state snapshot to the run trace."""
-        append_jsonl(
-            run_dir / "state_trace.jsonl",
-            {
-                "timestamp": utc_now_iso(),
-                "state": state.to_dict(),
-            },
-        )
-
     def _resolve_meta_skill_backend_config(self) -> dict[str, Any]:
         """Resolve the model backend config used by model-backed meta-skills."""
         meta_config = self._llm_config_from(dict(self.config.get("meta_skills", {})))
@@ -893,27 +861,23 @@ class PlannerLoop:
     def _log_step_summary(
         self,
         *,
-        run_dir: Path,
+        recorder: CompactRunRecorder,
         state: AgentState,
         plan_step,
         stage_before: str,
         extra: dict[str, Any],
     ) -> None:
-        """Append a compact per-step summary that is easier to read than the full state trace."""
-        append_jsonl(
-            run_dir / "steps.jsonl",
-            {
-                "timestamp": utc_now_iso(),
-                "step_id": state.current_step,
-                "action_type": plan_step.action_type,
-                "target": plan_step.target,
-                "stage_before": stage_before,
-                "stage_after": state.active_workflow_stage,
-                "pending_candidates": len(state.pending_candidates),
-                "last_responses": len(state.last_responses),
-                "memory_entries": int(state.memory_summary.get("total_entries", 0)),
-                "selected_skill_names": list(state.selected_skill_names),
-                "planner_flags": dict(state.planner_flags),
-                "extra": extra,
-            },
+        """Record one compact planner-facing step summary."""
+        recorder.record_step_summary(
+            step_id=state.current_step,
+            timestamp=utc_now_iso(),
+            action_type=plan_step.action_type,
+            target=plan_step.target,
+            plan_reason=plan_step.reason,
+            planner_args=dict(plan_step.args),
+            stage_before=stage_before,
+            stage_after=state.active_workflow_stage,
+            selected_skill_names=list(state.selected_skill_names),
+            planner_flags=dict(state.planner_flags),
+            result=extra,
         )

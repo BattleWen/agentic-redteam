@@ -19,7 +19,7 @@ planner:
     api_key: "FAKE_API_KEY"
     timeout_seconds: 8
     temperature: 0.1
-    max_tokens: 600
+    max_tokens: 6000
     fallback_to_rule_based: true
 
 meta_skills:

@@ -1,12 +1,10 @@
 name: escalation
 description: Escalation path for harmless memory analysis and meta-skill drafting.
-initial_stage: escalation_memory
+initial_stage: escalation_analysis
 
 skill_groups:
-  memory:
-    - memory-summarize
   analysis:
-    - retrieval-analysis
+    - memory-summarize
   meta:
     - refine-skill
     - combine-skills

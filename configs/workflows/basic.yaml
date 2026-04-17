@@ -18,7 +18,7 @@ skill_groups:
 policy:
   exploration_weight: 0.30
   promotion_margin: 0.05
-  escalation_stage: escalation_memory
+  escalation_stage: escalation_analysis
   refine_stage: refine
 
 conditions:
