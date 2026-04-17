@@ -1,6 +1,7 @@
 __pycache__/
 .pytest_cache
-
+./tests/__pycache__/
+./core/__pycache__
 ./runs
-state/version_events.jsonl
+./state
 .codex
