@@ -11,7 +11,7 @@ from core.utils import read_yaml
 
 @dataclass
 class Workflow:
-    """Minimal workflow config with skill groups and conditional rules."""
+    """Minimal workflow config for skill groups and routing conditions."""
 
     name: str
     description: str

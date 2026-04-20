@@ -47,7 +47,7 @@ skills:
     api_key: "FAKE_API_KEY"
     timeout_seconds: 12
     temperature: 0.9
-    max_tokens: 1000
+    max_tokens: 2048
 
 evaluator:
   backend: composite
@@ -69,7 +69,7 @@ environment:
   backend: llm
   target_profile:
     model_name: mock-target-model
-    mode: harmless-sandbox
+    mode: sandbox
     notes:
       - default backend is local mock
       - remote target execution is optional and still gated by framework constraints
@@ -86,7 +86,7 @@ environment:
     timeout_seconds: 12
     temperature: 0.0
     top_p: 1.0
-    max_tokens: 512
+    max_tokens: 2048
     fallback_to_mock: true
 
 defaults:

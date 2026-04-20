@@ -92,9 +92,11 @@ The run writes artifacts to `runs/<run_id>/`:
 - `compact_trace.json`
 - `final_summary.json`
 
+`compact_trace.json` is a concise step trace. Each step keeps the planner action, executed skills, plan reason, and the key input/output summaries you need for replay: candidate previews, response previews, and evaluation summaries. Runtime-only metadata is intentionally dropped.
+
 ## Remote Planner Backend
 
-The default planner remains rule-based and fully offline. The repository also supports an optional OpenAI-compatible planning backend for a vLLM-served model.
+Planner, guard, and environment now read directly from `configs/config.yaml`. The bundled config enables all three by default, and the planner/backend selection no longer has separate runtime enable flags.
 
 The bundled config already includes an example planner endpoint:
 
@@ -102,26 +104,22 @@ The bundled config already includes an example planner endpoint:
 - model: `orm`
 - API key: `FAKE_API_KEY`
 
-To enable it, either set `planner.backend: llm` in `configs/config.yaml` or use the runtime enable flag:
+The bundled config already enables the planner with:
 
 ```bash
 python main.py \
   --seed_prompt "Explain cloud formation safely." \
-  --workflow basic \
-  --planner-enabled
+  --workflow basic
 ```
 
 The remote planner only chooses structured next actions. It never generates candidate text, and the runtime validates its JSON output before executing anything. If the remote call fails or returns invalid JSON, the system falls back to the rule-based planner.
 
-The same pattern applies to the optional guard model and remote environment backend. Their endpoint details live in `configs/config.yaml`, and the CLI only needs enable flags:
+The same pattern applies to the guard model and environment backend. Their endpoint details also live in `configs/config.yaml`:
 
 ```bash
 python main.py \
   --seed_prompt "Explain cloud formation safely." \
-  --workflow basic \
-  --planner-enabled \
-  --guard-enabled \
-  --environment-enabled
+  --workflow basic
 ```
 
 ## Skill Protocol

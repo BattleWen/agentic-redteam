@@ -4,9 +4,9 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from core.planner import DIRECT_ANALYSIS_STAGE, DIRECT_STAGE, DIRECT_WORKFLOW_NAME, RuleBasedPlanner
+from core.planner import ANALYSIS_STAGE, META_STAGE, SEARCH_STAGE, RuleBasedPlanner
 from core.registry import SkillRegistry
-from core.schemas import AgentState
+from core.schemas import AgentState, PlanStep
 from core.skill_loader import SkillLoader
 from core.workflow import Workflow
 
@@ -29,8 +29,7 @@ REWRITE_SKILLS = {
 def load_workflows() -> dict[str, Workflow]:
     """Load workflow fixtures from the project."""
     basic = Workflow.from_file(PROJECT_ROOT / "configs" / "workflows" / "basic.yaml")
-    escalation = Workflow.from_file(PROJECT_ROOT / "configs" / "workflows" / "escalation.yaml")
-    return {"basic": basic, "escalation": escalation}
+    return {"basic": basic}
 
 
 def make_state() -> AgentState:
@@ -41,14 +40,14 @@ def make_state() -> AgentState:
         seed_prompt="Explain clouds.",
         memory_summary={},
         last_eval={},
-        active_workflow_stage="search",
+        active_workflow_stage=SEARCH_STAGE,
         available_skills=[],
         budget_remaining={"steps": 5, "skill_calls": 10, "environment_calls": 10},
     )
 
 
-def test_planner_selects_initial_search_skills() -> None:
-    """Planner should emit one structured search action at the start."""
+def test_planner_selects_one_initial_search_skill() -> None:
+    """Planner should emit one concrete invoke_skill action at the start."""
     specs = SkillLoader(PROJECT_ROOT).discover()
     registry = SkillRegistry(specs)
     planner = RuleBasedPlanner()
@@ -57,13 +56,13 @@ def test_planner_selects_initial_search_skills() -> None:
     plan = planner.plan(state, load_workflows(), registry)
 
     assert len(plan) == 1
-    assert plan[0].action_type == "select_search_paths"
-    assert "search_pool" in plan[0].args
-    assert plan[0].args["selected_skill_count"] == 1
+    assert plan[0].action_type == "invoke_skill"
+    assert plan[0].target in REWRITE_SKILLS
+    assert plan[0].args["candidate_count"] == 1
 
 
 def test_planner_uses_requested_workflow_search_pool() -> None:
-    """Planner should not silently force the basic workflow search pool."""
+    """Planner should not silently force the default workflow search pool."""
     specs = SkillLoader(PROJECT_ROOT).discover()
     registry = SkillRegistry(specs)
     planner = RuleBasedPlanner()
@@ -74,17 +73,17 @@ def test_planner_uses_requested_workflow_search_pool() -> None:
         "custom": Workflow(
             name="custom",
             description="Custom workflow",
-            initial_stage="search",
+            initial_stage=SEARCH_STAGE,
             skill_groups={"search": ["rewrite-emoji"]},
-            policy={"exploration_weight": 0.2},
+            policy={},
             conditions={},
         ),
     }
 
     plan = planner.plan(state, workflows, registry)
 
-    assert plan[0].args["search_pool"] == ["rewrite-emoji"]
-    assert plan[0].args["exploration_weight"] == 0.2
+    assert plan[0].action_type == "invoke_skill"
+    assert plan[0].target == "rewrite-emoji"
 
 
 def test_planner_executes_pending_candidates() -> None:
@@ -101,8 +100,8 @@ def test_planner_executes_pending_candidates() -> None:
     assert plan[0].action_type == "execute_candidates"
 
 
-def test_planner_routes_high_refusal_to_escalation() -> None:
-    """Planner should switch to escalation after a high-refusal evaluation."""
+def test_planner_routes_high_refusal_to_analysis() -> None:
+    """Planner should switch to analysis after a high-refusal evaluation."""
     planner = RuleBasedPlanner()
     state = make_state()
     state.last_eval = {
@@ -115,7 +114,7 @@ def test_planner_routes_high_refusal_to_escalation() -> None:
 
     planner.route_after_evaluation(state, load_workflows())
 
-    assert state.active_workflow_stage == "escalation_analysis"
+    assert state.active_workflow_stage == ANALYSIS_STAGE
 
 
 def test_planner_stops_after_successful_evaluation() -> None:
@@ -133,36 +132,31 @@ def test_planner_stops_after_successful_evaluation() -> None:
     assert state.active_workflow_stage == "stop"
 
 
-def test_direct_planner_uses_registry_search_pool_without_basic_workflow() -> None:
-    """Planner-direct mode should build search choices from registry, not basic.yaml."""
-    specs = SkillLoader(PROJECT_ROOT).discover()
-    registry = SkillRegistry(specs)
+def test_planner_moves_analysis_to_meta_after_memory_step() -> None:
+    """Analysis actions should advance the state into meta."""
     planner = RuleBasedPlanner()
     state = make_state()
-    state.workflow_name = DIRECT_WORKFLOW_NAME
-    state.active_workflow_stage = DIRECT_STAGE
+    state.active_workflow_stage = ANALYSIS_STAGE
 
-    plan = planner.plan(state, load_workflows(), registry)
+    planner.advance_after_action(
+        state,
+        PlanStep(action_type="analyze_memory", target="memory-summarize", args={}, reason="analyze"),
+        load_workflows(),
+    )
 
-    assert len(plan) == 1
-    assert plan[0].action_type == "select_search_paths"
-    assert set(plan[0].args["search_pool"]) == REWRITE_SKILLS
-    assert plan[0].args["selected_skill_count"] == 1
-    assert plan[0].args["mode"] == "planner_direct"
+    assert state.active_workflow_stage == META_STAGE
 
 
-def test_direct_planner_routes_high_refusal_to_direct_memory_stage() -> None:
-    """Planner-direct mode should not route high refusal through workflow stages."""
+def test_planner_returns_meta_to_search_after_meta_skill() -> None:
+    """Meta skill actions should return the workflow to search."""
     planner = RuleBasedPlanner()
     state = make_state()
-    state.workflow_name = DIRECT_WORKFLOW_NAME
-    state.active_workflow_stage = DIRECT_STAGE
-    state.last_eval = {
-        "refusal_score": 0.9,
-        "usefulness_score": 0.2,
-        "success": False,
-    }
+    state.active_workflow_stage = META_STAGE
 
-    planner.route_after_evaluation(state, load_workflows())
+    planner.advance_after_action(
+        state,
+        PlanStep(action_type="invoke_meta_skill", target="refine-skill", args={}, reason="refine"),
+        load_workflows(),
+    )
 
-    assert state.active_workflow_stage == DIRECT_ANALYSIS_STAGE
+    assert state.active_workflow_stage == SEARCH_STAGE

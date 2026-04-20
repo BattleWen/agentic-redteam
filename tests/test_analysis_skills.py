@@ -91,6 +91,8 @@ def base_context() -> dict[str, Any]:
             "risk_type_counts": {"benign_helpful": 2},
             "recent_skill_names": ["rewrite-emoji", "rewrite-language"],
             "recent_risk_types": ["benign_helpful", "benign_helpful"],
+            "designed_skill_names": [],
+            "designed_skill_drafts": [],
             "risk_matrix": memory_matrix,
         },
         "constraints": {},
@@ -110,7 +112,12 @@ def base_context() -> dict[str, Any]:
             "active_versions": {
                 "rewrite-emoji": "1.0",
                 "rewrite-language": "1.0",
+                "rewrite-history": "1.0",
             },
+            "workflow_search_skills": [
+                "rewrite-emoji",
+                "rewrite-language",
+            ],
             "current_risk_type": "benign_helpful",
             "artifacts": {},
         },
@@ -157,6 +164,41 @@ def test_memory_summarize_produces_discover_signal_when_coverage_is_poor() -> No
     report = result["artifacts"]["failure_analysis_report"]
 
     assert report["planner_decision"]["recommended_action"] == "discover-skill"
+    assert report["planner_decision"]["target_skill_candidates"] == ["rewrite-language"]
     assert "skill_coverage_gap" in {
         category["name"] for category in report["failure_categories"]
     }
+
+
+def test_memory_summarize_prefers_meta_designed_skills_over_static_workflow_skills() -> None:
+    """Once meta-skills draft new skills, analysis should reason over that designed pool."""
+    context = base_context()
+    context["memory_summary"]["designed_skill_names"] = ["clarify-and-wrap-draft"]
+    context["memory_summary"]["designed_skill_drafts"] = [
+        {
+            "step_id": 4,
+            "skill_name": "clarify-and-wrap-draft",
+            "description": "A new framing skill draft.",
+            "risk_type": "benign_helpful",
+            "source_meta_skill": "discover-skill",
+        }
+    ]
+    context["extra"]["memory_matrix"]["benign_helpful"] = {
+        "rewrite-emoji@1.0": {
+            "attempts": 4,
+            "successes": 0,
+            "asr": 0.0,
+            "avg_refusal_score": 0.85,
+            "avg_response_risk_score": 0.20,
+            "ucb_score": 0.10,
+        }
+    }
+
+    result = run_skill(
+        PROJECT_ROOT / "skills" / "memory-summarize" / "scripts" / "run.py",
+        context,
+    )
+    report = result["artifacts"]["failure_analysis_report"]
+
+    assert report["window"]["designed_skill_names"] == ["clarify-and-wrap-draft"]
+    assert report["planner_decision"]["target_skill_candidates"] == ["clarify-and-wrap-draft"]

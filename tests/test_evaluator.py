@@ -24,6 +24,7 @@ def test_evaluator_emits_score_bundles_without_guard() -> None:
     assert len(result.metadata["score_bundles"]) == 2
     assert result.metadata["best_candidate_index"] in {0, 1}
     assert result.usefulness_score == 0.0
+    assert result.metadata["seed_risk_type"] == "unclassified"
     assert result.metadata["primary_risk_type"] == "unclassified"
 
 
@@ -54,6 +55,13 @@ def test_evaluator_merges_guard_scores(monkeypatch) -> None:
             }
         ],
     )
+    monkeypatch.setattr(
+        evaluator.guard,
+        "_call_remote_guard_pair",
+        lambda *, prompt, response_text: "Safety: Safe\nCategories: None"
+        if prompt == "Explain clouds." and not response_text
+        else "",
+    )
     evaluator.guard.last_backend = "openai_compatible"
     evaluator.guard.last_error = None
 
@@ -67,11 +75,13 @@ def test_evaluator_merges_guard_scores(monkeypatch) -> None:
     assert bundle["response_risk_score"] == 0.0
     assert bundle["refusal_score"] == 0.0
     assert bundle["candidate_success"] is True
+    assert bundle["seed_risk_type"] == "unclassified"
     assert "guard_risk_score" not in bundle
     assert "heuristic_usefulness_score" not in bundle
     assert "overall_score" not in bundle
     assert result.usefulness_score == 0.0
     assert result.success is True
+    assert result.metadata["seed_risk_type"] == "unclassified"
     assert result.metadata["guard_backend"] == "openai_compatible"
 
 
@@ -101,6 +111,13 @@ def test_evaluator_uses_guard_refusal_over_local_heuristic(monkeypatch) -> None:
                 "notes": "Safety: Safe; Refusal: No",
             }
         ],
+    )
+    monkeypatch.setattr(
+        evaluator.guard,
+        "_call_remote_guard_pair",
+        lambda *, prompt, response_text: "Safety: Safe\nCategories: None"
+        if prompt == "Explain clouds." and not response_text
+        else "",
     )
     evaluator.guard.last_backend = "openai_compatible"
     evaluator.guard.last_error = None
@@ -229,14 +246,23 @@ def test_evaluator_uses_qwen3guard_categories_as_risk_types(monkeypatch) -> None
             }
         ],
     )
+    monkeypatch.setattr(
+        evaluator.guard,
+        "_call_remote_guard_pair",
+        lambda *, prompt, response_text: "Safety: Unsafe\nCategories: PII"
+        if prompt == "Seed prompt." and not response_text
+        else "",
+    )
     evaluator.guard.last_backend = "openai_compatible"
     evaluator.guard.last_error = None
 
     result = evaluator.evaluate(candidates, responses, seed_prompt="Seed prompt.")
     bundle = result.metadata["score_bundles"][0]
 
+    assert bundle["seed_risk_type"] == "PII"
     assert bundle["request_categories"] == ["Jailbreak"]
     assert bundle["risk_types"] == ["Jailbreak"]
+    assert result.metadata["seed_risk_type"] == "PII"
     assert bundle["primary_risk_type"] == "Jailbreak"
     assert result.metadata["primary_risk_type"] == "Jailbreak"
 

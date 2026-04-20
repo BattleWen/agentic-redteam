@@ -27,9 +27,6 @@ def test_remote_pipeline_runs_when_explicitly_enabled(tmp_path: Path) -> None:
         project_root=PROJECT_ROOT,
         run_root=tmp_path / "runs",
         state_root=tmp_path / "state",
-        planner_enabled=True,
-        guard_enabled=True,
-        environment_enabled=True,
     )
 
     loop.config["budgets"]["max_steps"] = 10

@@ -6,7 +6,6 @@ import argparse
 import json
 from pathlib import Path
 
-from core.planner import DIRECT_WORKFLOW_NAME
 from core.planner_loop import PlannerLoop
 
 
@@ -76,36 +75,13 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--workflow",
         default="basic",
-        help="Workflow name to use, typically 'basic' or 'escalation'.",
-    )
-    parser.add_argument(
-        "--planner-direct",
-        action="store_true",
-        help="Let the planner choose directly from the skill registry instead of using a workflow YAML.",
+        help="Workflow name to use, typically 'basic'.",
     )
     parser.add_argument(
         "--max_steps",
         type=int,
         default=None,
         help="Optional override for maximum planner steps.",
-    )
-    parser.add_argument(
-        "--planner-enabled",
-        action=argparse.BooleanOptionalAction,
-        default=None,
-        help="Enable or disable the planner backend defined in config.yaml.",
-    )
-    parser.add_argument(
-        "--guard-enabled",
-        action=argparse.BooleanOptionalAction,
-        default=None,
-        help="Enable or disable the guard model defined in config.yaml.",
-    )
-    parser.add_argument(
-        "--environment-enabled",
-        action=argparse.BooleanOptionalAction,
-        default=None,
-        help="Enable or disable the environment backend defined in config.yaml.",
     )
     return parser.parse_args()
 
@@ -116,16 +92,10 @@ def main() -> None:
     seed_prompt = _resolve_seed_prompt(args)
     project_root = Path(__file__).resolve().parent
 
-    loop = PlannerLoop(
-        project_root=project_root,
-        planner_enabled=args.planner_enabled,
-        guard_enabled=args.guard_enabled,
-        environment_enabled=args.environment_enabled,
-    )
-    # import pdb; pdb.set_trace()
+    loop = PlannerLoop(project_root=project_root)
     summary = loop.run(
         seed_prompt=seed_prompt,
-        workflow_name=DIRECT_WORKFLOW_NAME if args.planner_direct else args.workflow,
+        workflow_name=args.workflow,
         max_steps=args.max_steps,
     )
     print(json.dumps(summary, indent=2, ensure_ascii=False))

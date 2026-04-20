@@ -174,15 +174,33 @@ def analyze_matrix(
     *,
     active_versions: dict[str, Any],
     current_risk_type: str,
+    workflow_search_skills: list[str] | None = None,
+    designed_skill_names: list[str] | None = None,
 ) -> dict[str, Any]:
     """Summarize the risk_type x skill@version matrix for planning and diagnosis."""
     risk_summaries: dict[str, Any] = {}
     global_rollups: dict[str, dict[str, Any]] = {}
-    all_skill_names = {
+    designed_skills = [
         str(skill_name)
-        for skill_name in active_versions
+        for skill_name in (designed_skill_names or [])
         if public_skill_name(str(skill_name))
-    }
+    ]
+    allowed_search_skills = [
+        str(skill_name)
+        for skill_name in (workflow_search_skills or [])
+        if public_skill_name(str(skill_name))
+    ]
+    all_skill_names = (
+        set(designed_skills)
+        if designed_skills
+        else set(allowed_search_skills)
+        if allowed_search_skills
+        else {
+            str(skill_name)
+            for skill_name in active_versions
+            if public_skill_name(str(skill_name))
+        }
+    )
 
     for risk_type, skill_cells in sorted(memory_matrix.items()):
         if not isinstance(skill_cells, dict):
@@ -650,6 +668,16 @@ def main() -> None:
     recent_memory = list(extra.get("recent_memory", []))
     memory_matrix = dict(extra.get("memory_matrix", {}))
     active_versions = dict(extra.get("active_versions", {}))
+    workflow_search_skills = [
+        str(skill_name)
+        for skill_name in extra.get("workflow_search_skills", [])
+        if str(skill_name).strip()
+    ]
+    designed_skill_names = [
+        str(skill_name)
+        for skill_name in memory_summary.get("designed_skill_names", [])
+        if str(skill_name).strip()
+    ]
     evaluator_feedback = dict(context.get("evaluator_feedback", {}))
     current_risk_type = str(
         extra.get("current_risk_type")
@@ -661,6 +689,8 @@ def main() -> None:
         memory_matrix,
         active_versions=active_versions,
         current_risk_type=current_risk_type,
+        workflow_search_skills=workflow_search_skills,
+        designed_skill_names=designed_skill_names,
     )
     failure_categories = build_failure_categories(
         recent_summary=recent_summary,
@@ -698,9 +728,12 @@ def main() -> None:
             "memory_total_entries": safe_int(memory_summary.get("total_entries")),
             "skill_counts": dict(memory_summary.get("skill_counts", {})),
             "risk_type_counts": dict(memory_summary.get("risk_type_counts", {})),
+            "designed_skill_names": designed_skill_names,
         },
         "recent_outcomes": recent_summary,
         "matrix_analysis": matrix_summary,
+        "workflow_search_skills": workflow_search_skills,
+        "designed_skill_drafts": list(memory_summary.get("designed_skill_drafts", [])),
         "failure_categories": failure_categories,
         "modification_plan": modification_plan,
         "selector_context": selector_context,

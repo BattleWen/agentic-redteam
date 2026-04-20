@@ -10,11 +10,10 @@ from core.environment import build_environment
 from core.evaluator import MockEvaluator
 from core.executor import SkillExecutor
 from core.memory_store import MemoryStore
-from core.planner import DIRECT_STAGE, DIRECT_WORKFLOW_NAME, LLMPlanner, RuleBasedPlanner
+from core.planner import LLMPlanner, RuleBasedPlanner
 from core.registry import SkillRegistry
 from core.run_report import CompactRunRecorder
-from core.schemas import AgentState, MemoryEntry, PlanStep, SkillContext, SkillExecutionResult
-from core.selector import SearchSkillSelector
+from core.schemas import AgentState, MemoryEntry, SkillContext, SkillExecutionResult
 from core.skill_loader import SkillLoader
 from core.utils import ensure_dir, make_run_id, read_yaml, utc_now_iso, write_json
 from core.versioning import SkillVersionManager
@@ -32,27 +31,9 @@ class PlannerLoop:
         project_root: Path,
         run_root: Path | None = None,
         state_root: Path | None = None,
-        planner_overrides: dict[str, Any] | None = None,
-        evaluator_overrides: dict[str, Any] | None = None,
-        environment_overrides: dict[str, Any] | None = None,
-        planner_enabled: bool | None = None,
-        guard_enabled: bool | None = None,
-        environment_enabled: bool | None = None,
     ) -> None:
         self.project_root = project_root
-        self.config = read_yaml(project_root / "configs" / "config.yaml")
-        if planner_enabled is not None:
-            self._apply_planner_enabled(planner_enabled)
-        if guard_enabled is not None:
-            self._apply_guard_enabled(guard_enabled)
-        if environment_enabled is not None:
-            self._apply_environment_enabled(environment_enabled)
-        if planner_overrides:
-            self._apply_planner_overrides(planner_overrides)
-        if evaluator_overrides:
-            self._apply_evaluator_overrides(evaluator_overrides)
-        if environment_overrides:
-            self._apply_environment_overrides(environment_overrides)
+        self.config = self._normalize_config(read_yaml(project_root / "configs" / "config.yaml"))
         self.run_root = run_root or (project_root / self.config["paths"]["runs_dir"])
 
         loader = SkillLoader(
@@ -81,7 +62,6 @@ class PlannerLoop:
             guard_config=dict(self.config.get("evaluator", {}).get("guard_model", {}))
         )
         self.planner = self._build_planner()
-        self.selector = SearchSkillSelector()
         self.recent_memory_window = int(self.config["defaults"].get("recent_memory_window", 5))
 
     def run(
@@ -93,12 +73,13 @@ class PlannerLoop:
     ) -> dict[str, Any]:
         """Run the planner loop from start to finish."""
         workflows = self._load_workflows()
-        direct_planning = workflow_name in {None, DIRECT_WORKFLOW_NAME}
-        if not direct_planning and workflow_name not in workflows:
+        resolved_workflow_name = str(
+            workflow_name or self.config.get("defaults", {}).get("workflow", "basic")
+        )
+        if resolved_workflow_name not in workflows:
             raise ValueError(f"Unknown workflow: {workflow_name}")
-        chosen_workflow = None if direct_planning else workflows[str(workflow_name)]
-        resolved_workflow_name = DIRECT_WORKFLOW_NAME if direct_planning else str(workflow_name)
-        initial_stage = DIRECT_STAGE if direct_planning else chosen_workflow.initial_stage
+        chosen_workflow = workflows[resolved_workflow_name]
+        initial_stage = chosen_workflow.initial_stage
 
         budget = BudgetManager(
             max_steps=max_steps or int(self.config["budgets"]["max_steps"]),
@@ -130,23 +111,22 @@ class PlannerLoop:
             state.budget_remaining = budget.remaining()
 
             plan_steps = self.planner.plan(state, workflows, self.registry)
-            if len(plan_steps) == 1 and plan_steps[0].action_type == "stop":
+            if not plan_steps:
+                break
+            plan_step = plan_steps[0]
+            if plan_step.action_type == "stop":
                 break
 
-            for index, plan_step in enumerate(plan_steps):
-                self._execute_plan_step(
-                    plan_step=plan_step,
-                    state=state,
-                    memory=memory,
-                    budget=budget,
-                    recorder=recorder,
-                    workflows=workflows,
-                )
-                if index < len(plan_steps) - 1:
-                    state.memory_summary = memory.summary()
-                    state.budget_remaining = budget.remaining()
-                if state.active_workflow_stage == "stop":
-                    break
+            self._execute_plan_step(
+                plan_step=plan_step,
+                state=state,
+                memory=memory,
+                budget=budget,
+                recorder=recorder,
+                workflows=workflows,
+            )
+            if state.active_workflow_stage == "stop":
+                break
 
             budget.consume_step()
             state.current_step += 1
@@ -178,18 +158,6 @@ class PlannerLoop:
         write_json(run_dir / "final_summary.json", summary)
         return summary
 
-    def _apply_planner_enabled(self, enabled: bool) -> None:
-        """Switch between the local rule planner and the configured LLM planner."""
-        self._apply_planner_overrides({"backend": LLM_BACKEND if enabled else "rule_based"})
-
-    def _apply_environment_enabled(self, enabled: bool) -> None:
-        """Switch between the local mock environment and the configured LLM environment."""
-        self._apply_environment_overrides({"backend": LLM_BACKEND if enabled else "mock"})
-
-    def _apply_guard_enabled(self, enabled: bool) -> None:
-        """Enable or disable the configured remote guard model."""
-        self._apply_evaluator_overrides({"guard_model": {"enabled": enabled}})
-
     def _llm_config_from(self, config_section: dict[str, Any]) -> dict[str, Any]:
         """Read the preferred LLM config key while accepting the legacy key."""
         return dict(config_section.get("llm") or config_section.get(LEGACY_LLM_BACKEND, {}))
@@ -198,63 +166,40 @@ class PlannerLoop:
         """Normalize the old backend name to the shorter config name."""
         return LLM_BACKEND if backend == LEGACY_LLM_BACKEND else backend
 
-    def _apply_planner_overrides(self, overrides: dict[str, Any]) -> None:
-        """Merge runtime planner overrides into the loaded config."""
-        planner_config = dict(self.config.get("planner", {}))
-        llm_config = self._llm_config_from(planner_config)
+    def _normalize_config(self, config: dict[str, Any]) -> dict[str, Any]:
+        """Normalize config sections and default planner, guard, and environment to enabled."""
+        normalized = dict(config)
 
-        for key, value in overrides.items():
-            if key in {"llm", LEGACY_LLM_BACKEND} and isinstance(value, dict):
-                llm_config.update(
-                    {sub_key: sub_value for sub_key, sub_value in value.items() if sub_value is not None}
-                )
-            elif value is not None:
-                planner_config[key] = self._normalize_backend_name(value) if key == "backend" else value
+        planner_config = dict(normalized.get("planner", {}))
+        planner_backend = planner_config.get("backend")
+        planner_config["backend"] = self._normalize_backend_name(
+            LLM_BACKEND if planner_backend is None else planner_backend
+        )
+        normalized["planner"] = planner_config
 
-        planner_config["llm"] = llm_config
-        planner_config.pop(LEGACY_LLM_BACKEND, None)
-        self.config["planner"] = planner_config
+        evaluator_config = dict(normalized.get("evaluator", {}))
+        guard_config = dict(evaluator_config.get("guard_model", {}))
+        guard_enabled = guard_config.get("enabled")
+        guard_config["enabled"] = True if guard_enabled is None else bool(guard_enabled)
+        evaluator_config["guard_model"] = guard_config
+        normalized["evaluator"] = evaluator_config
 
-    def _build_planner(self) -> RuleBasedPlanner:
+        environment_config = dict(normalized.get("environment", {}))
+        environment_backend = environment_config.get("backend")
+        environment_config["backend"] = self._normalize_backend_name(
+            LLM_BACKEND if environment_backend is None else environment_backend
+        )
+        normalized["environment"] = environment_config
+
+        return normalized
+
+    def _build_planner(self) -> LLMPlanner | RuleBasedPlanner:
         """Instantiate the configured planner backend."""
         planner_config = dict(self.config.get("planner", {}))
-        backend = str(self._normalize_backend_name(planner_config.get("backend", "rule_based")))
+        backend = str(self._normalize_backend_name(planner_config.get("backend", LLM_BACKEND)))
         if backend == LLM_BACKEND:
             return LLMPlanner(self._llm_config_from(planner_config))
         return RuleBasedPlanner()
-
-    def _apply_evaluator_overrides(self, overrides: dict[str, Any]) -> None:
-        """Merge runtime evaluator overrides into the loaded config."""
-        evaluator_config = dict(self.config.get("evaluator", {}))
-        guard_config = dict(evaluator_config.get("guard_model", {}))
-
-        for key, value in overrides.items():
-            if key == "guard_model" and isinstance(value, dict):
-                guard_config.update(
-                    {sub_key: sub_value for sub_key, sub_value in value.items() if sub_value is not None}
-                )
-            elif value is not None:
-                evaluator_config[key] = value
-
-        evaluator_config["guard_model"] = guard_config
-        self.config["evaluator"] = evaluator_config
-
-    def _apply_environment_overrides(self, overrides: dict[str, Any]) -> None:
-        """Merge runtime environment overrides into the loaded config."""
-        environment_config = dict(self.config.get("environment", {}))
-        llm_config = self._llm_config_from(environment_config)
-
-        for key, value in overrides.items():
-            if key in {"llm", LEGACY_LLM_BACKEND} and isinstance(value, dict):
-                llm_config.update(
-                    {sub_key: sub_value for sub_key, sub_value in value.items() if sub_value is not None}
-                )
-            elif value is not None:
-                environment_config[key] = self._normalize_backend_name(value) if key == "backend" else value
-
-        environment_config["llm"] = llm_config
-        environment_config.pop(LEGACY_LLM_BACKEND, None)
-        self.config["environment"] = environment_config
 
     def _load_workflows(self) -> dict[str, Workflow]:
         """Load all built-in workflow YAML files."""
@@ -289,13 +234,20 @@ class PlannerLoop:
                 state.active_workflow_stage = "stop"
                 return
             prior_stage = state.active_workflow_stage
-            result = self._invoke_skill_like_step(plan_step, state, memory, budget, recorder)
+            workflow = workflows.get(state.workflow_name) or next(iter(workflows.values()))
+            result = self._invoke_skill_like_step(
+                plan_step,
+                state,
+                memory,
+                budget,
+                recorder,
+                workflow=workflow,
+            )
             if (
                 plan_step.action_type == "invoke_meta_skill"
                 and str(plan_step.target) == "refine-skill"
-                and prior_stage == "refine"
+                and prior_stage == workflow.get_policy("meta_stage", "meta")
             ):
-                workflow = workflows.get(state.workflow_name) or next(iter(workflows.values()))
                 self._apply_refinement_decision(
                     state=state,
                     result=result,
@@ -310,32 +262,6 @@ class PlannerLoop:
                 extra={
                     "generated_candidates": len(result.candidates),
                     "artifact_keys": sorted(result.artifacts),
-                },
-            )
-            return
-
-        if plan_step.action_type == "select_search_paths":
-            if budget.remaining()["skill_calls"] <= 0 or budget.remaining()["environment_calls"] <= 0:
-                state.active_workflow_stage = "stop"
-                return
-            self._select_search_paths(
-                state=state,
-                memory=memory,
-                budget=budget,
-                recorder=recorder,
-                plan_step=plan_step,
-            )
-            selection = list(state.artifacts.get("last_selection", []))
-            selection_rankings = list(state.artifacts.get("last_selection_rankings", []))
-            self._log_step_summary(
-                recorder=recorder,
-                state=state,
-                plan_step=plan_step,
-                stage_before=stage_before,
-                extra={
-                    "selected_skills": selection,
-                    "candidate_rankings": selection_rankings,
-                    "selected_skill_count": len(selection),
                 },
             )
             return
@@ -396,92 +322,6 @@ class PlannerLoop:
 
         raise ValueError(f"Unsupported action type: {plan_step.action_type}")
 
-    def _select_search_paths(
-        self,
-        *,
-        state: AgentState,
-        memory: MemoryStore,
-        budget: BudgetManager,
-        recorder: CompactRunRecorder,
-        plan_step,
-    ) -> None:
-        """Run selector search and materialize the chosen skill into pending candidates."""
-        search_pool = list(plan_step.args.get("search_pool", []))
-        prompt_bucket = self.selector.classify_prompt_bucket(state.seed_prompt)
-        recent_risk_types = list(state.memory_summary.get("recent_risk_types", []))
-        target_risk_type = str(
-            state.last_eval.get("primary_risk_type")
-            or (recent_risk_types[-1] if recent_risk_types else "unclassified")
-        )
-        applicable_specs = self.registry.filter_applicable(
-            prompt_bucket=prompt_bucket,
-            category="attack",
-            stage="search",
-            names=search_pool,
-        )
-        if applicable_specs:
-            search_pool = [spec.name for spec in applicable_specs]
-        if not search_pool:
-            state.active_workflow_stage = "stop"
-            return
-
-        try:
-            requested_skill_count = int(plan_step.args.get("selected_skill_count", 1))
-        except (TypeError, ValueError):
-            requested_skill_count = 1
-        selected_skill_count = max(
-            1,
-            min(requested_skill_count, 1, len(search_pool), int(budget.remaining()["skill_calls"])),
-        )
-        self.selector.exploration_weight = float(
-            plan_step.args.get("exploration_weight", self.selector.exploration_weight)
-        )
-
-        ranked_paths = self.selector.select_paths(
-            seed_prompt=state.seed_prompt,
-            target_risk_type=target_risk_type,
-            search_pool=search_pool,
-            memory_store=memory,
-            version_manager=self.version_manager,
-            registry=self.registry,
-            path_count=selected_skill_count,
-            beam_width=1,
-            path_length=1,
-        )
-        paths = ranked_paths[:selected_skill_count]
-        if not paths:
-            state.active_workflow_stage = "stop"
-            return
-
-        state.current_prompt_bucket = paths[0].prompt_bucket
-        state.current_risk_type = paths[0].risk_type
-        state.selected_skill_names = list(
-            dict.fromkeys(skill_name for path in paths for skill_name in path.skill_names)
-        )
-        state.artifacts["last_selection"] = [path.to_dict() for path in paths]
-        state.artifacts["last_selection_rankings"] = [path.to_dict() for path in ranked_paths]
-
-        for selection_rank, path in enumerate(paths, start=1):
-            for node in path.nodes:
-                if budget.remaining()["skill_calls"] <= 0:
-                    state.active_workflow_stage = "stop"
-                    return
-                selected_step = PlanStep(
-                    action_type="invoke_skill",
-                    target=node.skill_name,
-                    args={
-                        "mode": str(plan_step.args.get("mode", "selected_search")),
-                        "candidate_count": int(plan_step.args.get("candidate_count", 1)),
-                        "selection_score": round(node.score, 6),
-                        "prompt_bucket": path.prompt_bucket,
-                        "risk_type": path.risk_type,
-                        "selection_id": path.path_id,
-                        "selection_rank": selection_rank,
-                    },
-                    reason=path.reason,
-                )
-                self._invoke_skill_like_step(selected_step, state, memory, budget, recorder)
-
     def _invoke_skill_like_step(
         self,
         plan_step,
@@ -489,14 +329,26 @@ class PlannerLoop:
         memory: MemoryStore,
         budget: BudgetManager,
         recorder: CompactRunRecorder,
+        *,
+        workflow: Workflow,
     ) -> SkillExecutionResult:
         """Invoke a skill or meta-skill and merge its outputs into state."""
         spec = self.registry.get(str(plan_step.target))
+        if plan_step.action_type == "invoke_skill":
+            state.selected_skill_names = [spec.name]
+            state.current_prompt_bucket = self._classify_prompt_bucket(state.seed_prompt)
+            recent_risk_types = list(state.memory_summary.get("recent_risk_types", []))
+            state.current_risk_type = str(
+                plan_step.args.get("risk_type")
+                or state.last_eval.get("primary_risk_type")
+                or (recent_risk_types[-1] if recent_risk_types else state.current_risk_type)
+            )
         context = self._build_skill_context(
             state=state,
             memory=memory,
             plan_args=plan_step.args,
             skill_name=spec.name,
+            workflow=workflow,
         )
         result = self.executor.execute(spec, context)
         budget.consume_skill()
@@ -513,6 +365,15 @@ class PlannerLoop:
                 state.pending_candidates.append(candidate)
 
         state.artifacts[spec.name] = result.artifacts
+        if plan_step.action_type == "invoke_meta_skill":
+            draft_skill = dict(result.artifacts.get("draft_skill", {}))
+            if draft_skill:
+                memory.append_designed_skill(
+                    step_id=state.current_step,
+                    draft_skill=draft_skill,
+                    risk_type=str(plan_step.args.get("target_risk_type", state.current_risk_type)),
+                    source_meta_skill=spec.name,
+                )
         recorder.record_skill_call(
             step_id=state.current_step,
             timestamp=utc_now_iso(),
@@ -526,6 +387,21 @@ class PlannerLoop:
             result=result.to_dict(),
         )
         return result
+
+    def _classify_prompt_bucket(self, seed_prompt: str) -> str:
+        """Assign a coarse prompt bucket without the old search-selector dependency."""
+        lowered = seed_prompt.lower()
+        if any(marker in lowered for marker in ("json", "yaml", "xml", "schema", "{", "}")):
+            return "structured_request"
+        if any(marker in lowered for marker in ("rewrite", "rephrase", "paraphrase", "restate")):
+            return "rewrite_request"
+        if any(marker in lowered for marker in ("role", "persona", "teacher", "librarian", "curator")):
+            return "roleplay_style"
+        if any(marker in lowered for marker in ("explain", "describe", "summarize", "friendly", "simple")):
+            return "educational_explanation"
+        if any(marker in lowered for marker in ("bypass", "jailbreak", "exploit", "malware", "weapon")):
+            return "safety_sensitive"
+        return "general"
 
     def _execute_candidates(
         self,
@@ -583,6 +459,9 @@ class PlannerLoop:
                 "step_id": state.current_step,
                 "skill_names": skill_names,
                 "best_skill": best_skill,
+                "seed_risk_type": str(
+                    eval_payload.get("metadata", {}).get("seed_risk_type", "unclassified")
+                ),
                 "risk_types": list(eval_payload.get("metadata", {}).get("risk_types", [])),
                 "primary_risk_type": str(
                     eval_payload.get("metadata", {}).get("primary_risk_type", "unclassified")
@@ -610,6 +489,9 @@ class PlannerLoop:
                 "request_safety_label": str(bundle.get("request_safety_label", "not_scored")),
                 "response_safety_label": str(bundle.get("response_safety_label", "not_scored")),
                 "refusal_label": bundle.get("refusal_label"),
+                "seed_risk_type": str(
+                    bundle.get("seed_risk_type", eval_payload.get("seed_risk_type", "unclassified"))
+                ),
                 "request_categories": list(bundle.get("request_categories", [])),
                 "request_risk_score": float(bundle.get("request_risk_score", 0.0)),
                 "response_risk_score": float(bundle.get("response_risk_score", 0.0)),
@@ -645,6 +527,8 @@ class PlannerLoop:
             step_id=state.current_step,
             timestamp=utc_now_iso(),
             result=eval_payload,
+            candidates=list(state.pending_candidates),
+            responses=list(state.last_responses),
         )
 
         state.pending_candidates = []
@@ -761,9 +645,11 @@ class PlannerLoop:
         memory: MemoryStore,
         plan_args: dict[str, Any],
         skill_name: str,
+        workflow: Workflow,
     ) -> SkillContext:
         """Construct the JSON context passed into a skill."""
         active_skill_version = self.version_manager.active_version(skill_name)
+        workflow_search_skills = self._workflow_search_skills(workflow)
         extra = {
             "action_args": plan_args,
             "recent_memory": [entry.to_dict() for entry in memory.recent(self.recent_memory_window)],
@@ -776,6 +662,7 @@ class PlannerLoop:
             "meta_skill_backend": self._resolve_meta_skill_backend_config(),
             "current_risk_type": state.current_risk_type,
             "memory_matrix": memory.matrix(),
+            "workflow_search_skills": workflow_search_skills,
             "active_versions": {
                 spec.name: self.version_manager.active_version(spec.name)
                 for spec in self.registry.all()
@@ -807,6 +694,28 @@ class PlannerLoop:
             evaluator_feedback=dict(state.last_eval),
             extra=extra,
         )
+
+    def _workflow_search_skills(self, workflow: Workflow) -> list[str]:
+        """Return the active search-skill set allowed by the current workflow."""
+        declared = workflow.get_group("search")
+        if declared:
+            return [
+                spec.name
+                for spec in self.registry.filter(
+                    names=declared,
+                    category="attack",
+                    stage="search",
+                    status="active",
+                )
+            ]
+        return [
+            spec.name
+            for spec in self.registry.filter(
+                category="attack",
+                stage="search",
+                status="active",
+            )
+        ]
 
     def _read_skill_doc(self, skill_name: str) -> str:
         """Read the selected skill's full SKILL.md only when it is needed."""

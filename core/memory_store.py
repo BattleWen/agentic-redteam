@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections import Counter
 from math import log, sqrt
+from typing import Any
 
 from core.schemas import MemoryEntry
 
@@ -14,6 +15,7 @@ class MemoryStore:
     def __init__(self) -> None:
         self._entries: list[MemoryEntry] = []
         self._risk_matrix: dict[str, dict[str, dict[str, object]]] = {}
+        self._designed_skill_drafts: list[dict[str, Any]] = []
 
     def append(self, entry: MemoryEntry) -> None:
         """Append a new memory entry and update its matrix cell."""
@@ -29,6 +31,50 @@ class MemoryStore:
     def by_skill(self, skill_name: str) -> list[MemoryEntry]:
         """Return all entries produced by a given skill."""
         return [entry for entry in self._entries if entry.skill_name == skill_name]
+
+    def append_designed_skill(
+        self,
+        *,
+        step_id: int,
+        draft_skill: dict[str, Any],
+        risk_type: str = "unclassified",
+        source_meta_skill: str = "discover-skill",
+    ) -> None:
+        """Record one meta-designed draft skill without treating it as an evaluated attempt."""
+        skill_name = str(draft_skill.get("name", "")).strip()
+        if not skill_name:
+            return
+
+        normalized = {
+            "step_id": int(step_id),
+            "skill_name": skill_name,
+            "description": str(draft_skill.get("description", "")).strip(),
+            "risk_type": str(risk_type or "unclassified"),
+            "source_meta_skill": str(source_meta_skill or "discover-skill"),
+            "base_skill": str(draft_skill.get("base_skill", "")).strip(),
+            "base_skills": [
+                str(item)
+                for item in draft_skill.get("base_skills", [])
+                if str(item).strip()
+            ]
+            if isinstance(draft_skill.get("base_skills", []), list)
+            else [],
+            "triggering_patterns": dict(draft_skill.get("triggering_patterns", {}))
+            if isinstance(draft_skill.get("triggering_patterns", {}), dict)
+            else {},
+            "candidate_logic": [
+                str(item)
+                for item in draft_skill.get("candidate_logic", [])
+                if str(item).strip()
+            ]
+            if isinstance(draft_skill.get("candidate_logic", []), list)
+            else [],
+        }
+
+        self._designed_skill_drafts = [
+            entry for entry in self._designed_skill_drafts if entry.get("skill_name") != skill_name
+        ]
+        self._designed_skill_drafts.append(normalized)
 
     def recent_skill_names(self, limit: int = 5) -> list[str]:
         """Return the most recent skill names."""
@@ -102,6 +148,14 @@ class MemoryStore:
             "risk_type_counts": dict(risk_type_counts),
             "recent_skill_names": self.recent_skill_names(5),
             "recent_risk_types": self.recent_risk_types(5),
+            "designed_skill_names": [
+                str(entry.get("skill_name", ""))
+                for entry in self._designed_skill_drafts[-5:]
+                if str(entry.get("skill_name", "")).strip()
+            ],
+            "designed_skill_drafts": [
+                dict(entry) for entry in self._designed_skill_drafts[-5:]
+            ],
             "recent_failure_tags": [
                 tag for tag, _count in recent_failure_tags.most_common(8)
             ],
