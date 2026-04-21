@@ -43,7 +43,6 @@ def public_skill_name(skill_name: str) -> bool:
     """Return whether a skill should appear in planning hints."""
     return skill_name not in {
         "memory-summarize",
-        "retrieval-analysis",
         "refine-skill",
         "combine-skills",
         "discover-skill",

@@ -104,6 +104,9 @@ def test_end_to_end_basic_workflow_runs(tmp_path: Path, monkeypatch) -> None:
     eval_steps = [step for step in compact_trace["steps"] if step["action_type"] == "evaluate_candidates"]
     assert eval_steps
     assert eval_steps[0]["output"]["candidate_results"][0]["evaluation"]["success"] is True
+    assert "text_preview" not in eval_steps[0]["output"]["candidate_results"][0]
+    assert "response" not in eval_steps[0]["output"]["candidate_results"][0]
+    assert "refusal_score" not in eval_steps[0]["output"]["evaluation"]
     assert "risk_matrix" in summary["memory_summary"]
 
 

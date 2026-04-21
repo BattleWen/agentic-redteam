@@ -72,9 +72,7 @@ class RuleBasedPlanner:
             search_pool = self._search_pool(workflow, registry)
             if not search_pool:
                 return [PlanStep(STOP_STAGE, None, {}, "No active search skills are available.")]
-            target = self._best_recent_skill(state)
-            if target not in search_pool:
-                target = search_pool[0]
+            target = self._next_search_target(state, search_pool)
             return [
                 PlanStep(
                     action_type="invoke_skill",
@@ -175,9 +173,19 @@ class RuleBasedPlanner:
         """Return active search-stage attack skills for the current workflow."""
         declared = workflow.get_group("search")
         if declared:
+            allowed_specs = {
+                spec.name: spec
+                for spec in registry.filter(
+                    names=declared,
+                    category="attack",
+                    stage=SEARCH_STAGE,
+                    status="active",
+                )
+            }
             return [
-                spec.name
-                for spec in registry.filter(names=declared, category="attack", stage=SEARCH_STAGE, status="active")
+                skill_name
+                for skill_name in declared
+                if skill_name in allowed_specs
             ]
         return [
             spec.name
@@ -214,10 +222,8 @@ class RuleBasedPlanner:
 
     def _latest_failure_analysis(self, state: AgentState) -> dict[str, Any]:
         """Return the latest failure-analysis artifact from state."""
-        for skill_name in ("memory-summarize", "retrieval-analysis"):
-            artifacts = state.artifacts.get(skill_name, {})
-            if not isinstance(artifacts, dict):
-                continue
+        artifacts = state.artifacts.get("memory-summarize", {})
+        if isinstance(artifacts, dict):
             for key in ("failure_analysis_report", "analysis_report", "memory_report"):
                 report = artifacts.get(key, {})
                 if isinstance(report, dict) and report:
@@ -280,6 +286,28 @@ class RuleBasedPlanner:
     def _best_recent_skill(self, state: AgentState) -> str | None:
         """Recover the best recent skill from evaluation metadata."""
         return state.last_eval.get("best_skill")
+
+    def _next_search_target(self, state: AgentState, search_pool: list[str]) -> str:
+        """Prefer workflow-covered unexplored skills before retrying the last best skill."""
+        attempted_counts = {
+            str(skill_name): int(count)
+            for skill_name, count in dict(state.memory_summary.get("skill_counts", {})).items()
+        }
+        unexplored = [
+            skill_name for skill_name in search_pool if attempted_counts.get(skill_name, 0) <= 0
+        ]
+        if unexplored:
+            return unexplored[0]
+
+        target = self._best_recent_skill(state)
+        if target in search_pool:
+            return str(target)
+
+        recent_skill_names = self._recent_skill_names(state)
+        for skill_name in reversed(recent_skill_names):
+            if skill_name in search_pool:
+                return skill_name
+        return search_pool[0]
 
     def _recent_skill_names(self, state: AgentState) -> list[str]:
         """Return recent unique skill names for meta reasoning."""

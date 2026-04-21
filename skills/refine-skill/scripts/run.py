@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import sys
 
+from core.meta_skill_context import extract_analysis_context, resolve_skill_names
 from core.meta_skill_model import generate_meta_artifact
 
 
@@ -42,36 +43,21 @@ def build_runtime_overrides(
     return {}
 
 
-def analysis_context(context: dict[str, object]) -> dict[str, object]:
-    """Collect structured analysis artifacts for meta-skill refinement."""
-    artifacts = dict(dict(context.get("extra", {})).get("artifacts", {}))
-    memory_artifacts = dict(artifacts.get("memory-summarize", {}))
-    retrieval_artifacts = dict(artifacts.get("retrieval-analysis", {}))
-    memory_report = dict(
-        memory_artifacts.get("failure_analysis_report")
-        or memory_artifacts.get("memory_report", {})
-    )
-    analysis_report = dict(
-        retrieval_artifacts.get("analysis_report", {})
-        or memory_artifacts.get("analysis_report", {})
-    )
-    meta_context = dict(retrieval_artifacts.get("meta_skill_context", {}))
-    if not meta_context:
-        meta_context = dict(memory_artifacts.get("meta_skill_context", {}))
-    return {
-        "memory_report": memory_report,
-        "analysis_report": analysis_report,
-        "meta_skill_context": meta_context,
-    }
-
-
 def main() -> None:
     """Read SkillContext JSON and emit a refinement proposal."""
     context = json.load(sys.stdin)
+    workflow_search_skills = list(context.get("extra", {}).get("workflow_search_skills", []))
     target_spec = dict(context.get("extra", {}).get("target_skill_spec", {}))
+    if not target_spec:
+        fallback_names = resolve_skill_names(
+            workflow_search_skills=workflow_search_skills,
+            desired_count=1,
+        )
+        if fallback_names:
+            target_spec = {"name": fallback_names[0]}
     feedback = dict(context.get("evaluator_feedback", {}))
     backend_config = dict(context.get("extra", {}).get("meta_skill_backend", {}))
-    analysis = analysis_context(context)
+    analysis = extract_analysis_context(context)
     meta_context = dict(analysis.get("meta_skill_context", {}))
     failure_signals = [str(signal) for signal in meta_context.get("failure_signals", [])]
 

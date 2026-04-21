@@ -1,13 +1,12 @@
 ---
 name: combine-skills
-description: Use during refinement or escalation to draft a new skill concept that
+description: Use during meta strategy updates to draft a new skill concept that
   combines the framing, transformation, or behavior of multiple existing skills.
 metadata:
   version: '1.0'
   category: meta
   stage:
-  - refine
-  - escalation
+  - meta
 ---
 
 # combine-skills

@@ -5,45 +5,28 @@ from __future__ import annotations
 import json
 import sys
 
+from core.meta_skill_context import extract_analysis_context, resolve_skill_names
 from core.meta_skill_model import generate_meta_artifact
-
-
-def analysis_context(context: dict[str, object]) -> dict[str, object]:
-    """Collect structured analysis artifacts for composing skill drafts."""
-    artifacts = dict(dict(context.get("extra", {})).get("artifacts", {}))
-    memory_artifacts = dict(artifacts.get("memory-summarize", {}))
-    retrieval_artifacts = dict(artifacts.get("retrieval-analysis", {}))
-    memory_report = dict(
-        memory_artifacts.get("failure_analysis_report")
-        or memory_artifacts.get("memory_report", {})
-    )
-    analysis_report = dict(
-        retrieval_artifacts.get("analysis_report", {})
-        or memory_artifacts.get("analysis_report", {})
-    )
-    meta_skill_context = dict(retrieval_artifacts.get("meta_skill_context", {}))
-    if not meta_skill_context:
-        meta_skill_context = dict(memory_artifacts.get("meta_skill_context", {}))
-    return {
-        "memory_report": memory_report,
-        "analysis_report": analysis_report,
-        "meta_skill_context": meta_skill_context,
-    }
 
 
 def main() -> None:
     """Read SkillContext JSON and emit a combined skill draft."""
     context = json.load(sys.stdin)
     target_specs = list(context.get("extra", {}).get("target_skill_specs", []))
+    workflow_search_skills = list(context.get("extra", {}).get("workflow_search_skills", []))
     backend_config = dict(context.get("extra", {}).get("meta_skill_backend", {}))
-    analysis = analysis_context(context)
+    analysis = extract_analysis_context(context)
     meta_context = dict(analysis.get("meta_skill_context", {}))
-    names = [spec.get("name", "unknown") for spec in target_specs[:2]]
-    suggested_pairs = list(meta_context.get("candidate_skill_combinations", []))
-    if suggested_pairs and isinstance(suggested_pairs[0], list) and len(suggested_pairs[0]) >= 2:
-        names = [str(name) for name in suggested_pairs[0][:2]]
+    names = resolve_skill_names(
+        target_specs=target_specs,
+        suggested_pairs=list(meta_context.get("candidate_skill_combinations", [])),
+        workflow_search_skills=workflow_search_skills,
+        desired_count=2,
+    )
     if len(names) < 2:
-        names = names + ["rewrite-emoji"] * (2 - len(names))
+        names = names + names[:1]
+    if len(names) < 2:
+        names = ["unknown-skill-a", "unknown-skill-b"]
 
     combined_name = f"{names[0]}-{names[1]}-combo-draft"
     fallback_artifacts = {
@@ -65,8 +48,9 @@ def main() -> None:
     }
     rationale = "Drafted a composite skill concept from existing configured skills."
     system_prompt = (
-        "You are a meta-skill composer"
+        "You are a harmless meta-skill composer inside a safety research framework. "
         "Return strict JSON only. "
+        "Do not generate unsafe content, policy bypasses, jailbreaks, malware, or deception. "
         "Combine two configured skills into one practical draft concept."
     )
     user_payload = {

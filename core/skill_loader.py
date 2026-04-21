@@ -18,10 +18,14 @@ class SkillLoader:
 
     def __init__(self, project_root: Path, skill_roots: list[Path] | None = None) -> None:
         self.project_root = project_root
-        self.skill_roots = skill_roots or [
-            project_root / "skills",
-            project_root / "meta_skills",
-        ]
+        self.skill_roots = list(
+            dict.fromkeys(
+                skill_roots
+                or [
+                    project_root / "skills",
+                ]
+            )
+        )
 
     def discover(self) -> list[SkillSpec]:
         """Scan all roots and return validated specs."""

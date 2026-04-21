@@ -9,8 +9,7 @@ All bundled skills are toy examples. They only perform mock prompt transformatio
 The framework demonstrates:
 
 - a fixed kernel for planning, execution, memory, evaluation, budgeting, and tracing
-- a normal skill space for transform and analysis skills
-- a meta-skill space for refinement, combination, and discovery of new toy skills
+- a unified skill space that contains transform, analysis, and meta skills
 - a rule-based planner that decides when to call skills, memory analysis, environment execution, and meta-skills
 
 ## Architecture
@@ -43,10 +42,10 @@ The framework demonstrates:
       +-------+-------+            |                       |
       |               |            |                       |
       v               v            v                       v
-+-------------+ +---------------+ +----------------+ +----------------+
-| skills/     | | meta_skills/  | | Mock Env       | | Mock Evaluator |
-| toy skills  | | skill drafts  | | target model   | | toy metrics     |
-+-------------+ +---------------+ +----------------+ +----------------+
++-------------------------+ +----------------+ +----------------+
+| skills/                 | | Mock Env       | | Mock Evaluator |
+| attack/analysis/meta    | | target model   | | toy metrics    |
++-------------------------+ +----------------+ +----------------+
 ```
 
 ## Directory Layout
@@ -59,7 +58,6 @@ project_root/
 ├── configs/
 ├── core/
 ├── skills/
-├── meta_skills/
 ├── runs/
 └── tests/
 ```
@@ -151,7 +149,7 @@ All `scripts/run.py` files must:
 
 ## Adding A Meta-Skill
 
-1. Create a new directory under `meta_skills/`.
+1. Create a new directory under `skills/`.
 2. Mark its `category` as `meta` in the `Runtime Metadata` block.
 3. Keep it harmless and focused on toy skill drafts or patch suggestions.
 4. Do not let it overwrite existing skills directly.

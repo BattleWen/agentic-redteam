@@ -31,12 +31,13 @@ def test_loader_discovers_all_skills() -> None:
     specs = loader.discover()
     names = {spec.name for spec in specs}
 
-    assert len(specs) == 15
+    assert len(specs) == 14
     assert REWRITE_SKILLS.issubset(names)
     assert "refine-skill" in names
     assert "discover-skill" in names
+    assert "retrieval-analysis" not in names
+    assert not (PROJECT_ROOT / "meta_skills").exists()
     assert not list(PROJECT_ROOT.glob("skills/*/skill.json"))
-    assert not list(PROJECT_ROOT.glob("meta_skills/*/skill.json"))
 
 
 def test_loader_populates_minimal_runtime_fields() -> None:
@@ -72,6 +73,19 @@ def test_loader_uses_frontmatter_as_machine_ground_truth() -> None:
     assert spec.stage == frontmatter["metadata"]["stage"]
     assert spec.entry == "scripts/run.py"
     assert "rewrite" in spec.description.lower()
+
+
+def test_bundled_skills_use_current_workflow_stage_names() -> None:
+    """Bundled skills should not advertise stale stage names from older workflows."""
+    specs = SkillLoader(PROJECT_ROOT).discover()
+    stages_by_name = {spec.name: set(spec.stage) for spec in specs}
+
+    assert stages_by_name["memory-summarize"] == {"analysis"}
+    assert stages_by_name["refine-skill"] == {"meta"}
+    assert stages_by_name["combine-skills"] == {"meta"}
+    assert stages_by_name["discover-skill"] == {"meta"}
+    assert all("escalation" not in stages for stages in stages_by_name.values())
+    assert all("refine" not in stages for stages in stages_by_name.values())
 
 
 def test_loader_reads_custom_frontmatter_without_name_based_inference(tmp_path: Path) -> None:

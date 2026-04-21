@@ -1,6 +1,6 @@
 ---
 name: memory-summarize
-description: Use during analysis or escalation to combine recent-memory
+description: Use during analysis to combine recent-memory
   summarization, failure diagnosis, modification planning, and planner guidance
   into one structured report.
 metadata:
@@ -8,7 +8,6 @@ metadata:
   category: analysis
   stage:
   - analysis
-  - escalation
 ---
 
 # memory-summarize

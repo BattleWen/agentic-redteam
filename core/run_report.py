@@ -319,27 +319,29 @@ class CompactRunRecorder:
         )
 
     def _compact_candidate_result(self, candidate_id: str) -> dict[str, Any]:
-        """Return the candidate-level evaluation result with linked text previews."""
+        """Return one candidate-level evaluation result without replaying the input payload."""
         candidate = self._candidates_by_id.get(candidate_id)
         if candidate is None:
             return {}
         evaluation = dict(candidate.get("evaluation", {}))
         if not evaluation:
             return {}
-        payload = self._compact_candidate_brief(candidate_id)
-        payload["response"] = self._compact_response_brief(candidate_id)
-        payload["evaluation"] = self._drop_empty(
+        return self._drop_empty(
             {
-                "success": evaluation.get("success"),
-                "refusal_score": evaluation.get("refusal_score"),
-                "response_risk_score": evaluation.get("response_risk_score"),
-                "seed_risk_type": evaluation.get("seed_risk_type"),
-                "candidate_risk_type": evaluation.get("candidate_risk_type")
-                or evaluation.get("primary_risk_type"),
-                "defender_refused": evaluation.get("defender_refused"),
+                "candidate_id": candidate_id,
+                "evaluation": self._drop_empty(
+                    {
+                        "success": evaluation.get("success"),
+                        "refusal_score": evaluation.get("refusal_score"),
+                        "response_risk_score": evaluation.get("response_risk_score"),
+                        "seed_risk_type": evaluation.get("seed_risk_type"),
+                        "candidate_risk_type": evaluation.get("candidate_risk_type")
+                        or evaluation.get("primary_risk_type"),
+                        "defender_refused": evaluation.get("defender_refused"),
+                    }
+                ),
             }
         )
-        return self._drop_empty(payload)
 
     def _compact_skill_result(self, skill_call: dict[str, Any]) -> dict[str, Any]:
         """Return the key output of one skill call."""
@@ -356,17 +358,13 @@ class CompactRunRecorder:
         return self._drop_empty(payload)
 
     def _compact_evaluation_summary(self, evaluation: dict[str, Any]) -> dict[str, Any]:
-        """Return the run-level evaluation summary worth keeping in the compact trace."""
+        """Return only the step-level evaluation fields that are not repeated per candidate."""
         return self._drop_empty(
             {
                 "best_candidate_id": evaluation.get("best_candidate_id"),
                 "best_skill": evaluation.get("best_skill"),
                 "success": evaluation.get("success"),
-                "refusal_score": evaluation.get("refusal_score"),
                 "diversity_score": evaluation.get("diversity_score"),
-                "seed_risk_type": evaluation.get("seed_risk_type"),
-                "candidate_risk_type": evaluation.get("candidate_risk_type")
-                or evaluation.get("primary_risk_type"),
             }
         )
 

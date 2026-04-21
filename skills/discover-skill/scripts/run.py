@@ -5,30 +5,8 @@ from __future__ import annotations
 import json
 import sys
 
+from core.meta_skill_context import extract_analysis_context
 from core.meta_skill_model import generate_meta_artifact
-
-
-def analysis_context(context: dict[str, object]) -> dict[str, object]:
-    """Collect structured analysis artifacts for discovery drafts."""
-    artifacts = dict(dict(context.get("extra", {})).get("artifacts", {}))
-    memory_artifacts = dict(artifacts.get("memory-summarize", {}))
-    retrieval_artifacts = dict(artifacts.get("retrieval-analysis", {}))
-    memory_report = dict(
-        memory_artifacts.get("failure_analysis_report")
-        or memory_artifacts.get("memory_report", {})
-    )
-    analysis_report = dict(
-        retrieval_artifacts.get("analysis_report", {})
-        or memory_artifacts.get("analysis_report", {})
-    )
-    meta_skill_context = dict(retrieval_artifacts.get("meta_skill_context", {}))
-    if not meta_skill_context:
-        meta_skill_context = dict(memory_artifacts.get("meta_skill_context", {}))
-    return {
-        "memory_report": memory_report,
-        "analysis_report": analysis_report,
-        "meta_skill_context": meta_skill_context,
-    }
 
 
 def main() -> None:
@@ -37,7 +15,7 @@ def main() -> None:
     memory_summary = dict(context.get("memory_summary", {}))
     feedback = dict(context.get("evaluator_feedback", {}))
     backend_config = dict(context.get("extra", {}).get("meta_skill_backend", {}))
-    analysis = analysis_context(context)
+    analysis = extract_analysis_context(context)
     meta_context = dict(analysis.get("meta_skill_context", {}))
     failure_patterns = dict(meta_context.get("failure_patterns", {}))
 
@@ -71,8 +49,9 @@ def main() -> None:
     }
     rationale = "Drafted a new skill concept from repeated failure signals."
     system_prompt = (
-        "You are a meta-skill discoverer"
+        "You are a harmless meta-skill discoverer inside a safety research framework. "
         "Return strict JSON only. "
+        "Do not generate unsafe content, policy bypasses, jailbreaks, malware, or deception. "
         "Propose one new skill concept grounded in the failure patterns."
     )
     user_payload = {

@@ -86,6 +86,40 @@ def test_planner_uses_requested_workflow_search_pool() -> None:
     assert plan[0].target == "rewrite-emoji"
 
 
+def test_planner_prefers_unexplored_workflow_search_skill_after_failure() -> None:
+    """After one failed search attempt, planner should cover the next workflow skill first."""
+    specs = SkillLoader(PROJECT_ROOT).discover()
+    registry = SkillRegistry(specs)
+    planner = RuleBasedPlanner()
+    state = make_state()
+    state.workflow_name = "custom"
+    state.memory_summary = {
+        "skill_counts": {"rewrite-char": 1},
+        "recent_skill_names": ["rewrite-char"],
+    }
+    state.last_eval = {
+        "best_skill": "rewrite-char",
+        "success": False,
+        "refusal_score": 1.0,
+    }
+    workflows = {
+        "basic": load_workflows()["basic"],
+        "custom": Workflow(
+            name="custom",
+            description="Custom workflow",
+            initial_stage=SEARCH_STAGE,
+            skill_groups={"search": ["rewrite-char", "rewrite-history"]},
+            policy={},
+            conditions={},
+        ),
+    }
+
+    plan = planner.plan(state, workflows, registry)
+
+    assert plan[0].action_type == "invoke_skill"
+    assert plan[0].target == "rewrite-history"
+
+
 def test_planner_executes_pending_candidates() -> None:
     """Planner should send pending candidates to the environment."""
     specs = SkillLoader(PROJECT_ROOT).discover()

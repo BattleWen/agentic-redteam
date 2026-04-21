@@ -40,7 +40,6 @@ class PlannerLoop:
             project_root=project_root,
             skill_roots=[
                 project_root / self.config["paths"]["skills_dir"],
-                project_root / self.config["paths"]["meta_skills_dir"],
             ],
         )
         self.registry = SkillRegistry(loader.discover())

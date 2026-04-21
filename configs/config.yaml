@@ -1,6 +1,5 @@
 paths:
   skills_dir: skills
-  meta_skills_dir: meta_skills
   workflows_dir: configs/workflows
   runs_dir: runs
   state_dir: state
