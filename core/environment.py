@@ -230,10 +230,8 @@ def build_environment(
     config = dict(config or {})
     backend = str(config.get("backend", "mock"))
 
-    if backend == "openai_compatible":
-        backend = "llm"
     if backend == "llm":
-        llm_config = dict(config.get("llm") or config.get("openai_compatible", {}))
+        llm_config = dict(config.get("llm", {}))
         return OpenAICompatibleEnvironment(
             target_profile=target_profile,
             config=llm_config,

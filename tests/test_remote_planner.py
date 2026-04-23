@@ -92,8 +92,8 @@ def test_remote_planner_accepts_bare_single_step_json(monkeypatch) -> None:
         planner,
         "_call_remote_planner",
         lambda **_kwargs: (
-            '{"action_type": "invoke_skill", "target": "rewrite-language", '
-            '"args": {"candidate_count": 1}, "reason": "Try language rewrites first."}'
+            '{"action_type": "invoke_skill", "target": "rewrite-char", '
+            '"args": {"candidate_count": 1}, "reason": "Try character rewrites first."}'
         ),
     )
 
@@ -101,7 +101,7 @@ def test_remote_planner_accepts_bare_single_step_json(monkeypatch) -> None:
 
     assert len(plan) == 1
     assert plan[0].action_type == "invoke_skill"
-    assert plan[0].target == "rewrite-language"
+    assert plan[0].target == "rewrite-char"
     assert plan[0].args["candidate_count"] == 1
     assert state.planner_flags["planner_backend"] == "llm"
 

@@ -20,7 +20,6 @@ from core.versioning import SkillVersionManager
 from core.workflow import Workflow
 
 LLM_BACKEND = "llm"
-LEGACY_LLM_BACKEND = "openai_compatible"
 
 
 class PlannerLoop:
@@ -157,23 +156,13 @@ class PlannerLoop:
         write_json(run_dir / "final_summary.json", summary)
         return summary
 
-    def _llm_config_from(self, config_section: dict[str, Any]) -> dict[str, Any]:
-        """Read the preferred LLM config key while accepting the legacy key."""
-        return dict(config_section.get("llm") or config_section.get(LEGACY_LLM_BACKEND, {}))
-
-    def _normalize_backend_name(self, backend: object) -> object:
-        """Normalize the old backend name to the shorter config name."""
-        return LLM_BACKEND if backend == LEGACY_LLM_BACKEND else backend
-
     def _normalize_config(self, config: dict[str, Any]) -> dict[str, Any]:
         """Normalize config sections and default planner, guard, and environment to enabled."""
         normalized = dict(config)
 
         planner_config = dict(normalized.get("planner", {}))
         planner_backend = planner_config.get("backend")
-        planner_config["backend"] = self._normalize_backend_name(
-            LLM_BACKEND if planner_backend is None else planner_backend
-        )
+        planner_config["backend"] = LLM_BACKEND if planner_backend is None else planner_backend
         normalized["planner"] = planner_config
 
         evaluator_config = dict(normalized.get("evaluator", {}))
@@ -185,9 +174,7 @@ class PlannerLoop:
 
         environment_config = dict(normalized.get("environment", {}))
         environment_backend = environment_config.get("backend")
-        environment_config["backend"] = self._normalize_backend_name(
-            LLM_BACKEND if environment_backend is None else environment_backend
-        )
+        environment_config["backend"] = LLM_BACKEND if environment_backend is None else environment_backend
         normalized["environment"] = environment_config
 
         return normalized
@@ -195,9 +182,9 @@ class PlannerLoop:
     def _build_planner(self) -> LLMPlanner | RuleBasedPlanner:
         """Instantiate the configured planner backend."""
         planner_config = dict(self.config.get("planner", {}))
-        backend = str(self._normalize_backend_name(planner_config.get("backend", LLM_BACKEND)))
+        backend = str(planner_config.get("backend", LLM_BACKEND))
         if backend == LLM_BACKEND:
-            return LLMPlanner(self._llm_config_from(planner_config))
+            return LLMPlanner(planner_config.get("llm", {}))
         return RuleBasedPlanner()
 
     def _load_workflows(self) -> dict[str, Workflow]:
@@ -717,12 +704,12 @@ class PlannerLoop:
 
     def _resolve_meta_skill_backend_config(self) -> dict[str, Any]:
         """Resolve the model backend config used by model-backed meta-skills."""
-        meta_config = self._llm_config_from(dict(self.config.get("meta_skills", {})))
+        meta_config = dict(self.config.get("meta_skills", {}).get("llm", {}))
         if not meta_config:
             return {"enabled": False}
 
         if bool(meta_config.get("inherit_planner_endpoint", False)):
-            planner_config = self._llm_config_from(dict(self.config.get("planner", {})))
+            planner_config = dict(self.config.get("planner", {}).get("llm", {}))
             for key in ("base_url", "model", "api_key"):
                 if not meta_config.get(key):
                     meta_config[key] = planner_config.get(key, "")
@@ -730,12 +717,12 @@ class PlannerLoop:
 
     def _resolve_skill_model_backend_config(self) -> dict[str, Any]:
         """Resolve the model backend config passed to model-backed skills."""
-        skill_config = self._llm_config_from(dict(self.config.get("skills", {})))
+        skill_config = dict(self.config.get("skills", {}).get("llm", {}))
         if not skill_config:
             return {"enabled": False}
 
         if bool(skill_config.get("inherit_planner_endpoint", False)):
-            planner_config = self._llm_config_from(dict(self.config.get("planner", {})))
+            planner_config = dict(self.config.get("planner", {}).get("llm", {}))
             for key in ("base_url", "model", "api_key"):
                 if not skill_config.get(key):
                     skill_config[key] = planner_config.get(key, "")
@@ -744,19 +731,19 @@ class PlannerLoop:
     def _executor_timeout_seconds(self) -> int:
         """Choose a subprocess timeout that safely exceeds nested backend calls."""
         planner_timeout = int(
-            self._llm_config_from(dict(self.config.get("planner", {}))).get("timeout_seconds", 8)
+            dict(self.config.get("planner", {}).get("llm", {})).get("timeout_seconds", 8)
         )
         meta_timeout = int(
-            self._llm_config_from(dict(self.config.get("meta_skills", {}))).get("timeout_seconds", 12)
+            dict(self.config.get("meta_skills", {}).get("llm", {})).get("timeout_seconds", 12)
         )
         skill_timeout = int(
-            self._llm_config_from(dict(self.config.get("skills", {}))).get("timeout_seconds", 12)
+            dict(self.config.get("skills", {}).get("llm", {})).get("timeout_seconds", 12)
         )
         evaluator_timeout = int(
             self.config.get("evaluator", {}).get("guard_model", {}).get("timeout_seconds", 8)
         )
         environment_timeout = int(
-            self._llm_config_from(dict(self.config.get("environment", {}))).get("timeout_seconds", 12)
+            dict(self.config.get("environment", {}).get("llm", {})).get("timeout_seconds", 12)
         )
         return max(30, planner_timeout, meta_timeout, skill_timeout, evaluator_timeout, environment_timeout) + 5
 

@@ -113,11 +113,7 @@ class RuleBasedPlanner:
             state.active_workflow_stage = STOP_STAGE
             return
 
-        if workflow.evaluate_condition("refusal_high", state_dict):
-            state.active_workflow_stage = workflow.get_policy("analysis_stage", ANALYSIS_STAGE)
-            return
-
-        if workflow.evaluate_condition("repeated_failures", state_dict):
+        if workflow.evaluate_condition("should_analyze", state_dict):
             state.active_workflow_stage = workflow.get_policy("analysis_stage", ANALYSIS_STAGE)
             return
 

@@ -47,6 +47,25 @@ class Workflow:
         if not rule:
             return False
 
+        # Support 'any' for OR logic (evaluate multiple sub-conditions)
+        if "any" in rule:
+            sub_rules = rule.get("any", [])
+            if not isinstance(sub_rules, list):
+                return False
+            return any(self._evaluate_single_condition(sub_rule, state) for sub_rule in sub_rules)
+
+        # Support 'all' for AND logic (evaluate multiple sub-conditions)
+        if "all" in rule:
+            sub_rules = rule.get("all", [])
+            if not isinstance(sub_rules, list):
+                return False
+            return all(self._evaluate_single_condition(sub_rule, state) for sub_rule in sub_rules)
+
+        # Single condition evaluation (backward compatible)
+        return self._evaluate_single_condition(rule, state)
+
+    def _evaluate_single_condition(self, rule: dict[str, Any], state: dict[str, Any]) -> bool:
+        """Evaluate a single condition rule."""
         left = self._resolve_path(state, str(rule.get("source", "")))
         right = rule.get("value")
         if "value_from" in rule:

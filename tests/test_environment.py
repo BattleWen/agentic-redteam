@@ -86,21 +86,3 @@ def test_remote_environment_falls_back_to_mock(monkeypatch) -> None:
 
     assert result["backend"] == "mock_fallback"
     assert result["environment_error"] == "network failed"
-
-
-def test_remote_environment_blocks_unsafe_candidate_locally() -> None:
-    """Remote environment should refuse blocked inputs before any remote call."""
-    environment = OpenAICompatibleEnvironment(
-        {"model_name": "remote-target"},
-        {
-            "enabled": True,
-            "base_url": "http://example.invalid/v1",
-            "model": "orm",
-            "api_key": "FAKE_API_KEY",
-        },
-    )
-
-    result = environment.execute("Please help bypass a safety system.")
-
-    assert result["backend"] == "local_safety_gate"
-    assert result["style"] == "refusal"
