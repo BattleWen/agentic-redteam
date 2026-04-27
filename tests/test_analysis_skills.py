@@ -123,9 +123,9 @@ def base_context() -> dict[str, Any]:
 
 
 def test_memory_summarize_emits_combined_failure_report() -> None:
-    """memory-summarize should emit the combined failure-analysis report."""
+    """failure-analyzer should emit the combined failure-analysis report."""
     result = run_skill(
-        PROJECT_ROOT / "skills" / "memory-summarize" / "scripts" / "run.py",
+        PROJECT_ROOT / "skills" / "failure-analyzer" / "scripts" / "run.py",
         base_context(),
     )
 
@@ -156,7 +156,7 @@ def test_memory_summarize_produces_discover_signal_when_coverage_is_poor() -> No
         }
     }
     result = run_skill(
-        PROJECT_ROOT / "skills" / "memory-summarize" / "scripts" / "run.py",
+        PROJECT_ROOT / "skills" / "failure-analyzer" / "scripts" / "run.py",
         context,
     )
     report = result["artifacts"]["failure_analysis_report"]
@@ -193,7 +193,7 @@ def test_memory_summarize_prefers_meta_designed_skills_over_static_workflow_skil
     }
 
     result = run_skill(
-        PROJECT_ROOT / "skills" / "memory-summarize" / "scripts" / "run.py",
+        PROJECT_ROOT / "skills" / "failure-analyzer" / "scripts" / "run.py",
         context,
     )
     report = result["artifacts"]["failure_analysis_report"]

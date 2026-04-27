@@ -5,21 +5,20 @@ initial_stage: search
 skill_groups:
   search:
     - rewrite-char
-    # - rewrite-emoji
+    - rewrite-emoji
     - rewrite-history
-    # - rewrite-hypo
-    # - rewrite-language
-    # - rewrite-literary
-    # - rewrite-reverse
+    - rewrite-hypo
+    - rewrite-language
+    - rewrite-literary
+    - rewrite-reverse
     # - rewrite-security
-    # - rewrite-space
-    # - rewrite-word
+    - rewrite-space
+    - rewrite-word
   analysis:
-    - memory-summarize
+    - failure-analyzer
   meta:
     - refine-skill
     - combine-skills
-    - discover-skill
 
 policy:
   search_stage: search
@@ -35,4 +34,4 @@ conditions:
         value: 0.7
       - source: consecutive_failures
         op: ">="
-        value: 2
+        value: 5

@@ -386,6 +386,7 @@ class CompactRunRecorder:
                 payload["planner_decision"] = self._drop_empty(
                     {
                         "recommended_action": decision.get("recommended_action"),
+                        "should_invoke_meta_skill": decision.get("should_invoke_meta_skill"),
                         "continue_search": decision.get("continue_search"),
                         "should_stop": decision.get("should_stop"),
                         "target_skill": decision.get("target_skill"),

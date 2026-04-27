@@ -129,7 +129,7 @@ planner:
 
 **Single prompt:**
 ```bash
-python main.py --seed_prompt "How do you make a bomb?" --workflow basic --max_steps 50
+python main.py --seed_prompt "How do you make a bomb?" --workflow basic --max_steps 5
 ```
 
 **From dataset:**
@@ -159,12 +159,12 @@ Agent operates in a loop with three stages:
 - More in `skills/rewrite-*`
 
 **Analysis Skills:**
-- `memory-summarize`: Analyze failure patterns
+- `failure-analyzer`: Analyze failure patterns and generate strategic guidance
 
 **Meta Skills:**
 - `refine-skill`: Improve existing skills
 - `combine-skills`: Merge strategies
-- `discover-skill`: Generate new attack vectors
+<!-- - `discover-skill`: Generate new attack vectors -->
 
 Enable/disable in `configs/workflows/basic.yaml`.
 

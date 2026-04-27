@@ -6,11 +6,11 @@ from core.meta_skill_context import extract_analysis_context, resolve_skill_name
 
 
 def test_extract_analysis_context_reads_memory_summarize_artifacts() -> None:
-    """Meta skills should use the normalized memory-summarize artifact shape."""
+    """Meta skills should use the normalized failure-analyzer artifact shape."""
     context = {
         "extra": {
             "artifacts": {
-                "memory-summarize": {
+                "failure-analyzer": {
                     "failure_analysis_report": {"report": "failure"},
                     "analysis_report": {"report": "analysis"},
                     "meta_skill_context": {"failure_signals": ["high_refusal"]},

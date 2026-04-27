@@ -20,6 +20,10 @@ from core.versioning import SkillVersionManager
 from core.workflow import Workflow
 
 LLM_BACKEND = "llm"
+# Actions that represent a meaningful agent decision and consume one step budget unit.
+# Mechanical transitions (execute_candidates, evaluate_candidates) complete the current
+# cycle automatically and are intentionally excluded.
+_STEP_CONSUMING_ACTIONS = frozenset({"invoke_skill", "analyze_memory", "invoke_meta_skill"})
 
 
 class PlannerLoop:
@@ -105,7 +109,7 @@ class PlannerLoop:
             run_dir=run_dir,
         )
 
-        while budget.can_continue():
+        while True:
             state.budget_remaining = budget.remaining()
 
             plan_steps = self.planner.plan(state, workflows, self.registry)
@@ -126,7 +130,8 @@ class PlannerLoop:
             if state.active_workflow_stage == "stop":
                 break
 
-            budget.consume_step()
+            if plan_step.action_type in _STEP_CONSUMING_ACTIONS:
+                budget.consume_step()
             state.current_step += 1
             state.memory_summary = memory.summary()
             state.budget_remaining = budget.remaining()
@@ -277,7 +282,7 @@ class PlannerLoop:
                 state=state,
                 skill_metrics=skill_metrics,
             )
-            self.planner.route_after_evaluation(state, workflows)
+            self.planner.route_after_evaluation(state, workflows, self.registry)
             self._log_step_summary(
                 recorder=recorder,
                 state=state,
@@ -320,7 +325,9 @@ class PlannerLoop:
         """Invoke a skill or meta-skill and merge its outputs into state."""
         spec = self.registry.get(str(plan_step.target))
         if plan_step.action_type == "invoke_skill":
-            state.selected_skill_names = [spec.name]
+            # 追加到已选择的skills列表（用于search完成检测）
+            if spec.name not in state.selected_skill_names:
+                state.selected_skill_names.append(spec.name)
             state.current_prompt_bucket = self._classify_prompt_bucket(state.seed_prompt)
             recent_risk_types = list(state.memory_summary.get("recent_risk_types", []))
             state.current_risk_type = str(
@@ -398,7 +405,14 @@ class PlannerLoop:
         responses: list[dict[str, Any]] = []
         for index, candidate in enumerate(state.pending_candidates):
             if budget.remaining()["environment_calls"] <= 0:
-                state.active_workflow_stage = "stop"
+                if not responses:
+                    # Zero responses collected — environment completely unavailable; stop immediately.
+                    state.active_workflow_stage = "stop"
+                else:
+                    # Partial execution: trim pending list to match responses already collected,
+                    # then let evaluate run so the partial data reaches memory and the recorder.
+                    state.pending_candidates = state.pending_candidates[:len(responses)]
+                    state.planner_flags["stop_after_evaluate"] = True
                 break
 
             budget.consume_environment()
@@ -426,6 +440,13 @@ class PlannerLoop:
         dict[tuple[str, str], dict[str, Any]],
     ]:
         """Evaluate latest responses and persist them into memory."""
+        if len(state.pending_candidates) != len(state.last_responses):
+            raise RuntimeError(
+                f"Candidate/response count mismatch before evaluation: "
+                f"{len(state.pending_candidates)} candidates vs "
+                f"{len(state.last_responses)} responses. "
+                "This indicates a bug in _execute_candidates."
+            )
         eval_result = self.evaluator.evaluate(
             state.pending_candidates,
             state.last_responses,
@@ -518,6 +539,8 @@ class PlannerLoop:
 
         state.pending_candidates = []
         state.last_responses = []
+        if state.planner_flags.pop("stop_after_evaluate", False):
+            state.active_workflow_stage = "stop"
         return eval_payload, skill_metrics
 
     def _aggregate_skill_metrics(
@@ -650,6 +673,11 @@ class PlannerLoop:
             },
         }
 
+        # For failure-analyzer, compute and pass better_skills
+        if skill_name == "failure-analyzer":
+            better_skills = self._compute_better_skills(state)
+            extra["better_skills"] = better_skills
+
         if "skill_name" in plan_args and plan_args["skill_name"] in self.registry.names():
             target_name = str(plan_args["skill_name"])
             extra["target_skill_spec"] = self.registry.get(target_name).to_dict()
@@ -674,6 +702,35 @@ class PlannerLoop:
             evaluator_feedback=dict(state.last_eval),
             extra=extra,
         )
+
+    def _compute_better_skills(
+        self,
+        state: AgentState,
+        current_risk_type: str | None = None,
+        top_n: int = 5,
+    ) -> list[str]:
+        """Return top N skills with high response_risk_score and low refusal_score."""
+        risk_type = current_risk_type or state.current_risk_type or "unclassified"
+        risk_matrix = dict(state.memory_summary.get("risk_matrix", {}))
+        risk_bucket = dict(risk_matrix.get(risk_type, {}))
+
+        skill_scores: list[tuple[str, float, float, float]] = []
+        for skill_key, cell in risk_bucket.items():
+            if not isinstance(cell, dict):
+                continue
+            skill_name = skill_key.split("@")[0]
+            attempts = int(cell.get("attempts", 0))
+            if attempts == 0:
+                continue
+
+            avg_response_risk = float(cell.get("avg_response_risk_score", 0.0))
+            avg_refusal = float(cell.get("avg_refusal_score", 1.0))
+
+            combined_score = avg_response_risk * (1.0 - avg_refusal)
+            skill_scores.append((skill_name, avg_response_risk, avg_refusal, combined_score))
+
+        skill_scores.sort(key=lambda x: (x[1], -x[2], x[3]), reverse=True)
+        return [name for name, _, _, _ in skill_scores[:top_n]]
 
     def _workflow_search_skills(self, workflow: Workflow) -> list[str]:
         """Return the active search-skill set allowed by the current workflow."""

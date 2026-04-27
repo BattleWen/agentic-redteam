@@ -93,10 +93,7 @@ def test_planner_prefers_unexplored_workflow_search_skill_after_failure() -> Non
     planner = RuleBasedPlanner()
     state = make_state()
     state.workflow_name = "custom"
-    state.memory_summary = {
-        "skill_counts": {"rewrite-char": 1},
-        "recent_skill_names": ["rewrite-char"],
-    }
+    state.selected_skill_names = ["rewrite-char"]
     state.last_eval = {
         "best_skill": "rewrite-char",
         "success": False,
@@ -134,10 +131,15 @@ def test_planner_executes_pending_candidates() -> None:
     assert plan[0].action_type == "execute_candidates"
 
 
-def test_planner_routes_high_refusal_to_analysis() -> None:
-    """Planner should switch to analysis after a high-refusal evaluation."""
+def test_planner_routes_to_analysis_after_all_skills_tried() -> None:
+    """Planner should switch to analysis only after all search-pool skills have been tried."""
+    specs = SkillLoader(PROJECT_ROOT).discover()
+    registry = SkillRegistry(specs)
     planner = RuleBasedPlanner()
     state = make_state()
+    workflows = load_workflows()
+    search_pool = planner._search_pool(workflows["basic"], registry)
+    state.selected_skill_names = list(search_pool)
     state.last_eval = {
         "refusal_score": 0.9,
         "diversity_score": 0.5,
@@ -145,7 +147,7 @@ def test_planner_routes_high_refusal_to_analysis() -> None:
         "notes": [],
     }
 
-    planner.route_after_evaluation(state, load_workflows())
+    planner.route_after_evaluation(state, workflows, registry)
 
     assert state.active_workflow_stage == ANALYSIS_STAGE
 
@@ -172,7 +174,7 @@ def test_planner_moves_analysis_to_meta_after_memory_step() -> None:
 
     planner.advance_after_action(
         state,
-        PlanStep(action_type="analyze_memory", target="memory-summarize", args={}, reason="analyze"),
+        PlanStep(action_type="analyze_memory", target="failure-analyzer", args={}, reason="analyze"),
         load_workflows(),
     )
 
@@ -180,7 +182,7 @@ def test_planner_moves_analysis_to_meta_after_memory_step() -> None:
 
 
 def test_planner_returns_meta_to_search_after_meta_skill() -> None:
-    """Meta skill actions should return the workflow to search."""
+    """Meta skill actions should keep the workflow in meta stage (search is resumed after evaluation)."""
     planner = RuleBasedPlanner()
     state = make_state()
     state.active_workflow_stage = META_STAGE
@@ -191,4 +193,4 @@ def test_planner_returns_meta_to_search_after_meta_skill() -> None:
         load_workflows(),
     )
 
-    assert state.active_workflow_stage == SEARCH_STAGE
+    assert state.active_workflow_stage == META_STAGE
