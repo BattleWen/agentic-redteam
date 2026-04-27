@@ -92,8 +92,8 @@ def test_remote_planner_accepts_bare_single_step_json(monkeypatch) -> None:
         planner,
         "_call_remote_planner",
         lambda **_kwargs: (
-            '{"action_type": "invoke_skill", "target": "rewrite-language", '
-            '"args": {"candidate_count": 1}, "reason": "Try language rewrites first."}'
+            '{"action_type": "invoke_skill", "target": "rewrite-char", '
+            '"args": {"candidate_count": 1}, "reason": "Try character rewrites first."}'
         ),
     )
 
@@ -101,7 +101,7 @@ def test_remote_planner_accepts_bare_single_step_json(monkeypatch) -> None:
 
     assert len(plan) == 1
     assert plan[0].action_type == "invoke_skill"
-    assert plan[0].target == "rewrite-language"
+    assert plan[0].target == "rewrite-char"
     assert plan[0].args["candidate_count"] == 1
     assert state.planner_flags["planner_backend"] == "llm"
 
@@ -187,9 +187,9 @@ def test_remote_planner_builds_stage_scoped_skill_cards() -> None:
 
     catalog = planner._build_skill_catalog(registry, action_options)
 
-    assert "entry" not in catalog["memory-summarize"]
-    assert "description" in catalog["memory-summarize"]
-    assert catalog["memory-summarize"]["category"] == "analysis"
+    assert "entry" not in catalog["failure-analyzer"]
+    assert "description" in catalog["failure-analyzer"]
+    assert catalog["failure-analyzer"]["category"] == "analysis"
 
 
 def test_remote_stage_router_routes_after_evaluation(monkeypatch) -> None:
@@ -201,7 +201,6 @@ def test_remote_stage_router_routes_after_evaluation(monkeypatch) -> None:
     state.last_eval = {
         "success": False,
         "refusal_score": 1.0,
-        "usefulness_score": 0.0,
     }
     state.consecutive_failures = 1
 
@@ -226,7 +225,7 @@ def test_remote_stage_router_can_return_search_after_analysis(monkeypatch) -> No
     state = make_state()
     state.active_workflow_stage = ANALYSIS_STAGE
     state.artifacts = {
-        "memory-summarize": {
+        "failure-analyzer": {
             "failure_analysis_report": {
                 "planner_decision": {
                     "continue_search": True,
@@ -244,7 +243,7 @@ def test_remote_stage_router_can_return_search_after_analysis(monkeypatch) -> No
 
     planner.advance_after_action(
         state,
-        PlanStep(action_type="analyze_memory", target="memory-summarize", args={}, reason="analyze"),
+        PlanStep(action_type="analyze_memory", target="failure-analyzer", args={}, reason="analyze"),
         load_workflows(),
     )
 
@@ -261,7 +260,6 @@ def test_remote_stage_router_falls_back_on_invalid_next_stage(monkeypatch) -> No
     state.last_eval = {
         "success": False,
         "refusal_score": 0.9,
-        "usefulness_score": 0.0,
     }
 
     monkeypatch.setattr(
@@ -272,6 +270,6 @@ def test_remote_stage_router_falls_back_on_invalid_next_stage(monkeypatch) -> No
 
     planner.route_after_evaluation(state, load_workflows())
 
-    assert state.active_workflow_stage == ANALYSIS_STAGE
+    assert state.active_workflow_stage == SEARCH_STAGE
     assert state.planner_flags["stage_router_backend"] == "local"
     assert state.planner_flags["stage_router_mode"] == "remote_fallback"

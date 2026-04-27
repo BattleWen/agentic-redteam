@@ -80,7 +80,7 @@ def test_bundled_skills_use_current_workflow_stage_names() -> None:
     specs = SkillLoader(PROJECT_ROOT).discover()
     stages_by_name = {spec.name: set(spec.stage) for spec in specs}
 
-    assert stages_by_name["memory-summarize"] == {"analysis"}
+    assert stages_by_name["failure-analyzer"] == {"analysis"}
     assert stages_by_name["refine-skill"] == {"meta"}
     assert stages_by_name["combine-skills"] == {"meta"}
     assert stages_by_name["discover-skill"] == {"meta"}
@@ -132,7 +132,7 @@ def test_registry_filters_applicable_skills_by_prompt_bucket() -> None:
         prompt_bucket="rewrite_request",
         category="attack",
         stage="search",
-        names=["rewrite-emoji", "memory-summarize"],
+        names=["rewrite-emoji", "failure-analyzer"],
     )
 
     assert {spec.name for spec in applicable} == {"rewrite-emoji"}
@@ -150,9 +150,9 @@ def test_registry_rejects_duplicates_and_builds_planner_cards() -> None:
     else:
         raise AssertionError("duplicate registration should fail")
 
-    cards = registry.planner_cards(names=["rewrite-emoji", "memory-summarize"])
+    cards = registry.planner_cards(names=["rewrite-emoji", "failure-analyzer"])
 
-    assert set(cards) == {"rewrite-emoji", "memory-summarize"}
+    assert set(cards) == {"rewrite-emoji", "failure-analyzer"}
     assert "entry" not in cards["rewrite-emoji"]
     assert cards["rewrite-emoji"]["category"] == "attack"
     assert "description" in cards["rewrite-emoji"]

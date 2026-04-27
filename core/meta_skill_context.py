@@ -6,9 +6,9 @@ from typing import Any
 
 
 def extract_analysis_context(context: dict[str, Any]) -> dict[str, dict[str, Any]]:
-    """Extract the normalized analysis artifacts produced by memory-summarize."""
+    """Extract the normalized analysis artifacts produced by failure-analyzer."""
     artifacts = dict(dict(context.get("extra", {})).get("artifacts", {}))
-    memory_artifacts = dict(artifacts.get("memory-summarize", {}))
+    memory_artifacts = dict(artifacts.get("failure-analyzer", {}))
     return {
         "memory_report": dict(
             memory_artifacts.get("failure_analysis_report")

@@ -1,8 +1,7 @@
 ---
-name: memory-summarize
-description: Use during analysis to combine recent-memory
-  summarization, failure diagnosis, modification planning, and planner guidance
-  into one structured report.
+name: failure-analyzer
+description: Analyzes failure patterns from memory, diagnoses issues, and generates
+  modification plans and planner guidance for strategic decision-making.
 metadata:
   version: '1.0'
   category: analysis
@@ -10,9 +9,9 @@ metadata:
   - analysis
 ---
 
-# memory-summarize
+# failure-analyzer
 
-This harmless analysis skill combines the old memory summarization and retrieval-style analysis steps into one report.
+This analysis skill performs comprehensive failure diagnosis and strategic planning.
 It reads recent evaluated memory entries from `SkillContext.extra.recent_memory` plus the risk matrix from `SkillContext.extra.memory_matrix`.
 
 It does not read the memory store directly.

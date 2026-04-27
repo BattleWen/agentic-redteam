@@ -20,7 +20,10 @@ from core.versioning import SkillVersionManager
 from core.workflow import Workflow
 
 LLM_BACKEND = "llm"
-LEGACY_LLM_BACKEND = "openai_compatible"
+# Actions that represent a meaningful agent decision and consume one step budget unit.
+# Mechanical transitions (execute_candidates, evaluate_candidates) complete the current
+# cycle automatically and are intentionally excluded.
+_STEP_CONSUMING_ACTIONS = frozenset({"invoke_skill", "analyze_memory", "invoke_meta_skill"})
 
 
 class PlannerLoop:
@@ -106,7 +109,7 @@ class PlannerLoop:
             run_dir=run_dir,
         )
 
-        while budget.can_continue():
+        while True:
             state.budget_remaining = budget.remaining()
 
             plan_steps = self.planner.plan(state, workflows, self.registry)
@@ -127,7 +130,8 @@ class PlannerLoop:
             if state.active_workflow_stage == "stop":
                 break
 
-            budget.consume_step()
+            if plan_step.action_type in _STEP_CONSUMING_ACTIONS:
+                budget.consume_step()
             state.current_step += 1
             state.memory_summary = memory.summary()
             state.budget_remaining = budget.remaining()
@@ -157,23 +161,13 @@ class PlannerLoop:
         write_json(run_dir / "final_summary.json", summary)
         return summary
 
-    def _llm_config_from(self, config_section: dict[str, Any]) -> dict[str, Any]:
-        """Read the preferred LLM config key while accepting the legacy key."""
-        return dict(config_section.get("llm") or config_section.get(LEGACY_LLM_BACKEND, {}))
-
-    def _normalize_backend_name(self, backend: object) -> object:
-        """Normalize the old backend name to the shorter config name."""
-        return LLM_BACKEND if backend == LEGACY_LLM_BACKEND else backend
-
     def _normalize_config(self, config: dict[str, Any]) -> dict[str, Any]:
         """Normalize config sections and default planner, guard, and environment to enabled."""
         normalized = dict(config)
 
         planner_config = dict(normalized.get("planner", {}))
         planner_backend = planner_config.get("backend")
-        planner_config["backend"] = self._normalize_backend_name(
-            LLM_BACKEND if planner_backend is None else planner_backend
-        )
+        planner_config["backend"] = LLM_BACKEND if planner_backend is None else planner_backend
         normalized["planner"] = planner_config
 
         evaluator_config = dict(normalized.get("evaluator", {}))
@@ -185,9 +179,7 @@ class PlannerLoop:
 
         environment_config = dict(normalized.get("environment", {}))
         environment_backend = environment_config.get("backend")
-        environment_config["backend"] = self._normalize_backend_name(
-            LLM_BACKEND if environment_backend is None else environment_backend
-        )
+        environment_config["backend"] = LLM_BACKEND if environment_backend is None else environment_backend
         normalized["environment"] = environment_config
 
         return normalized
@@ -195,9 +187,9 @@ class PlannerLoop:
     def _build_planner(self) -> LLMPlanner | RuleBasedPlanner:
         """Instantiate the configured planner backend."""
         planner_config = dict(self.config.get("planner", {}))
-        backend = str(self._normalize_backend_name(planner_config.get("backend", LLM_BACKEND)))
+        backend = str(planner_config.get("backend", LLM_BACKEND))
         if backend == LLM_BACKEND:
-            return LLMPlanner(self._llm_config_from(planner_config))
+            return LLMPlanner(planner_config.get("llm", {}))
         return RuleBasedPlanner()
 
     def _load_workflows(self) -> dict[str, Workflow]:
@@ -290,7 +282,7 @@ class PlannerLoop:
                 state=state,
                 skill_metrics=skill_metrics,
             )
-            self.planner.route_after_evaluation(state, workflows)
+            self.planner.route_after_evaluation(state, workflows, self.registry)
             self._log_step_summary(
                 recorder=recorder,
                 state=state,
@@ -302,7 +294,6 @@ class PlannerLoop:
                     ),
                     "best_skill": eval_payload.get("best_skill"),
                     "success": eval_payload.get("success"),
-                    "usefulness_score": eval_payload.get("usefulness_score"),
                     "refusal_score": eval_payload.get("refusal_score"),
                 },
             )
@@ -334,7 +325,9 @@ class PlannerLoop:
         """Invoke a skill or meta-skill and merge its outputs into state."""
         spec = self.registry.get(str(plan_step.target))
         if plan_step.action_type == "invoke_skill":
-            state.selected_skill_names = [spec.name]
+            # 追加到已选择的skills列表（用于search完成检测）
+            if spec.name not in state.selected_skill_names:
+                state.selected_skill_names.append(spec.name)
             state.current_prompt_bucket = self._classify_prompt_bucket(state.seed_prompt)
             recent_risk_types = list(state.memory_summary.get("recent_risk_types", []))
             state.current_risk_type = str(
@@ -412,7 +405,14 @@ class PlannerLoop:
         responses: list[dict[str, Any]] = []
         for index, candidate in enumerate(state.pending_candidates):
             if budget.remaining()["environment_calls"] <= 0:
-                state.active_workflow_stage = "stop"
+                if not responses:
+                    # Zero responses collected — environment completely unavailable; stop immediately.
+                    state.active_workflow_stage = "stop"
+                else:
+                    # Partial execution: trim pending list to match responses already collected,
+                    # then let evaluate run so the partial data reaches memory and the recorder.
+                    state.pending_candidates = state.pending_candidates[:len(responses)]
+                    state.planner_flags["stop_after_evaluate"] = True
                 break
 
             budget.consume_environment()
@@ -440,6 +440,13 @@ class PlannerLoop:
         dict[tuple[str, str], dict[str, Any]],
     ]:
         """Evaluate latest responses and persist them into memory."""
+        if len(state.pending_candidates) != len(state.last_responses):
+            raise RuntimeError(
+                f"Candidate/response count mismatch before evaluation: "
+                f"{len(state.pending_candidates)} candidates vs "
+                f"{len(state.last_responses)} responses. "
+                "This indicates a bug in _execute_candidates."
+            )
         eval_result = self.evaluator.evaluate(
             state.pending_candidates,
             state.last_responses,
@@ -532,6 +539,8 @@ class PlannerLoop:
 
         state.pending_candidates = []
         state.last_responses = []
+        if state.planner_flags.pop("stop_after_evaluate", False):
+            state.active_workflow_stage = "stop"
         return eval_payload, skill_metrics
 
     def _aggregate_skill_metrics(
@@ -554,7 +563,6 @@ class PlannerLoop:
                 {
                     "attempts": 0,
                     "successes": 0,
-                    "avg_usefulness_score": 0.0,
                     "avg_refusal_score": 0.0,
                     "avg_overall_score": 0.0,
                 },
@@ -562,19 +570,16 @@ class PlannerLoop:
             bundle = bundles.get(index, {})
             success = bool(bundle.get("candidate_success", eval_payload.get("success", False)))
             refusal_score = float(bundle.get("refusal_score", eval_payload.get("refusal_score", 0.0)))
-            usefulness_score = float(eval_payload.get("usefulness_score", 0.0)) if not bundles else 0.0
             overall_score = 1.0 if success else 0.0
 
             metric["attempts"] += 1
             metric["successes"] += int(success)
-            metric["avg_usefulness_score"] += usefulness_score
             metric["avg_refusal_score"] += refusal_score
             metric["avg_overall_score"] += overall_score
 
         for metric in grouped.values():
             attempts = max(int(metric["attempts"]), 1)
             metric["asr"] = int(metric["successes"]) / attempts
-            metric["avg_usefulness_score"] = float(metric["avg_usefulness_score"]) / attempts
             metric["avg_refusal_score"] = float(metric["avg_refusal_score"]) / attempts
             metric["avg_overall_score"] = float(metric["avg_overall_score"]) / attempts
 
@@ -668,6 +673,11 @@ class PlannerLoop:
             },
         }
 
+        # For failure-analyzer, compute and pass better_skills
+        if skill_name == "failure-analyzer":
+            better_skills = self._compute_better_skills(state)
+            extra["better_skills"] = better_skills
+
         if "skill_name" in plan_args and plan_args["skill_name"] in self.registry.names():
             target_name = str(plan_args["skill_name"])
             extra["target_skill_spec"] = self.registry.get(target_name).to_dict()
@@ -688,11 +698,39 @@ class PlannerLoop:
             target_profile=dict(self.config["environment"]["target_profile"]),
             conversation_history=[],
             memory_summary=state.memory_summary,
-            constraints=dict(self.config.get("constraints", {})),
             prior_candidates=list(state.pending_candidates),
             evaluator_feedback=dict(state.last_eval),
             extra=extra,
         )
+
+    def _compute_better_skills(
+        self,
+        state: AgentState,
+        current_risk_type: str | None = None,
+        top_n: int = 5,
+    ) -> list[str]:
+        """Return top N skills with high response_risk_score and low refusal_score."""
+        risk_type = current_risk_type or state.current_risk_type or "unclassified"
+        risk_matrix = dict(state.memory_summary.get("risk_matrix", {}))
+        risk_bucket = dict(risk_matrix.get(risk_type, {}))
+
+        skill_scores: list[tuple[str, float, float, float]] = []
+        for skill_key, cell in risk_bucket.items():
+            if not isinstance(cell, dict):
+                continue
+            skill_name = skill_key.split("@")[0]
+            attempts = int(cell.get("attempts", 0))
+            if attempts == 0:
+                continue
+
+            avg_response_risk = float(cell.get("avg_response_risk_score", 0.0))
+            avg_refusal = float(cell.get("avg_refusal_score", 1.0))
+
+            combined_score = avg_response_risk * (1.0 - avg_refusal)
+            skill_scores.append((skill_name, avg_response_risk, avg_refusal, combined_score))
+
+        skill_scores.sort(key=lambda x: (x[1], -x[2], x[3]), reverse=True)
+        return [name for name, _, _, _ in skill_scores[:top_n]]
 
     def _workflow_search_skills(self, workflow: Workflow) -> list[str]:
         """Return the active search-skill set allowed by the current workflow."""
@@ -723,12 +761,12 @@ class PlannerLoop:
 
     def _resolve_meta_skill_backend_config(self) -> dict[str, Any]:
         """Resolve the model backend config used by model-backed meta-skills."""
-        meta_config = self._llm_config_from(dict(self.config.get("meta_skills", {})))
+        meta_config = dict(self.config.get("meta_skills", {}).get("llm", {}))
         if not meta_config:
             return {"enabled": False}
 
         if bool(meta_config.get("inherit_planner_endpoint", False)):
-            planner_config = self._llm_config_from(dict(self.config.get("planner", {})))
+            planner_config = dict(self.config.get("planner", {}).get("llm", {}))
             for key in ("base_url", "model", "api_key"):
                 if not meta_config.get(key):
                     meta_config[key] = planner_config.get(key, "")
@@ -736,12 +774,12 @@ class PlannerLoop:
 
     def _resolve_skill_model_backend_config(self) -> dict[str, Any]:
         """Resolve the model backend config passed to model-backed skills."""
-        skill_config = self._llm_config_from(dict(self.config.get("skills", {})))
+        skill_config = dict(self.config.get("skills", {}).get("llm", {}))
         if not skill_config:
             return {"enabled": False}
 
         if bool(skill_config.get("inherit_planner_endpoint", False)):
-            planner_config = self._llm_config_from(dict(self.config.get("planner", {})))
+            planner_config = dict(self.config.get("planner", {}).get("llm", {}))
             for key in ("base_url", "model", "api_key"):
                 if not skill_config.get(key):
                     skill_config[key] = planner_config.get(key, "")
@@ -750,19 +788,19 @@ class PlannerLoop:
     def _executor_timeout_seconds(self) -> int:
         """Choose a subprocess timeout that safely exceeds nested backend calls."""
         planner_timeout = int(
-            self._llm_config_from(dict(self.config.get("planner", {}))).get("timeout_seconds", 8)
+            dict(self.config.get("planner", {}).get("llm", {})).get("timeout_seconds", 8)
         )
         meta_timeout = int(
-            self._llm_config_from(dict(self.config.get("meta_skills", {}))).get("timeout_seconds", 12)
+            dict(self.config.get("meta_skills", {}).get("llm", {})).get("timeout_seconds", 12)
         )
         skill_timeout = int(
-            self._llm_config_from(dict(self.config.get("skills", {}))).get("timeout_seconds", 12)
+            dict(self.config.get("skills", {}).get("llm", {})).get("timeout_seconds", 12)
         )
         evaluator_timeout = int(
             self.config.get("evaluator", {}).get("guard_model", {}).get("timeout_seconds", 8)
         )
         environment_timeout = int(
-            self._llm_config_from(dict(self.config.get("environment", {}))).get("timeout_seconds", 12)
+            dict(self.config.get("environment", {}).get("llm", {})).get("timeout_seconds", 12)
         )
         return max(30, planner_timeout, meta_timeout, skill_timeout, evaluator_timeout, environment_timeout) + 5
 

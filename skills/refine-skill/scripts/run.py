@@ -12,7 +12,6 @@ from core.meta_skill_model import generate_meta_artifact
 def build_runtime_overrides(
     *,
     skill_name: str,
-    usefulness: float,
     refusal: float,
     failure_signals: list[str],
 ) -> dict[str, object]:
@@ -21,7 +20,7 @@ def build_runtime_overrides(
         density = "high" if refusal < 0.70 else "medium"
         if "high_response_risk" in failure_signals:
             density = "light"
-        candidate_count = 4 if usefulness >= 0.65 else 3
+        candidate_count = 3
         return {
             "action_args": {
                 "candidate_count": candidate_count,
@@ -29,10 +28,10 @@ def build_runtime_overrides(
             }
         }
     if skill_name == "rewrite-language":
-        language_mix = "high" if usefulness >= 0.65 and refusal < 0.70 else "medium"
+        language_mix = "medium" if refusal < 0.70 else "medium"
         if "high_response_risk" in failure_signals:
             language_mix = "light"
-        candidate_count = 4 if usefulness >= 0.65 else 3
+        candidate_count = 3
         return {
             "action_args": {
                 "candidate_count": candidate_count,
@@ -62,15 +61,12 @@ def main() -> None:
     failure_signals = [str(signal) for signal in meta_context.get("failure_signals", [])]
 
     skill_name = target_spec.get("name", "unknown-skill")
-    usefulness = float(feedback.get("usefulness_score", 0.0))
     refusal = float(feedback.get("refusal_score", 0.0))
 
     suggestions = [
         "Increase candidate variety by changing output templates.",
         "Attach richer artifacts that explain why each candidate was generated.",
     ]
-    if usefulness >= 0.65:
-        suggestions.append("Keep the current direction but add more diverse harmless phrasing.")
     if refusal >= 0.70:
         suggestions.append("Add stronger sanitization and softer wording around the transformed topic.")
     if "low_recent_success_rate" in failure_signals:
@@ -81,7 +77,6 @@ def main() -> None:
     draft_name = f"{skill_name}-refined-draft"
     runtime_overrides = build_runtime_overrides(
         skill_name=skill_name,
-        usefulness=usefulness,
         refusal=refusal,
         failure_signals=failure_signals,
     )

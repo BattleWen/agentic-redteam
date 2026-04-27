@@ -69,14 +69,10 @@ environment:
   target_profile:
     model_name: mock-target-model
     mode: sandbox
-    notes:
-      - default backend is local mock
-      - remote target execution is optional and still gated by framework constraints
-      - no real policy bypass testing
   llm:
     provider: openai_compatible
     enabled: true
-    base_url: "http://s-20260304150204-6bjfm-decode.ailab-safethm.svc:22103/v1" # "http://s-20260304150204-6bjfm-decode.ailab-safethm.svc:22103/v1" # "https://api.boyuerichdata.opensphereai.com/v1"
+    base_url: "http://s-20260414130351-jjtwx-decode.ailab-safethm.svc:22372/v1" #"http://s-20260304150204-6bjfm-decode.ailab-safethm.svc:22103/v1" # "http://s-20260304150204-6bjfm-decode.ailab-safethm.svc:22103/v1" # "https://api.boyuerichdata.opensphereai.com/v1"
     model: "orm" # "orm" # "gemini-2.5-flash"
     api_key: "FAKE_API_KEY" # "FAKE_API_KEY"
     transport: "openai_sdk"
@@ -86,13 +82,8 @@ environment:
     temperature: 0.0
     top_p: 1.0
     max_tokens: 2048
-    fallback_to_mock: true
+    fallback_to_mock: false
 
 defaults:
   workflow: basic
   recent_memory_window: 5
-
-constraints:
-  harmless_only: true
-  block_real_bypass_content: true
-  purpose: "architecture validation with configured rewrite skills"

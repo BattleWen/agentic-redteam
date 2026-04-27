@@ -78,7 +78,6 @@ class SkillContext:
     target_profile: dict[str, Any]
     conversation_history: list[dict[str, Any]]
     memory_summary: dict[str, Any]
-    constraints: dict[str, Any]
     prior_candidates: list[dict[str, Any]]
     evaluator_feedback: dict[str, Any]
     extra: dict[str, Any]
@@ -97,7 +96,6 @@ class SkillContext:
             target_profile=dict(data.get("target_profile", {})),
             conversation_history=list(data.get("conversation_history", [])),
             memory_summary=dict(data.get("memory_summary", {})),
-            constraints=dict(data.get("constraints", {})),
             prior_candidates=list(data.get("prior_candidates", [])),
             evaluator_feedback=dict(data.get("evaluator_feedback", {})),
             extra=dict(data.get("extra", {})),
@@ -136,7 +134,6 @@ class EvalResult:
 
     success: bool
     refusal_score: float
-    usefulness_score: float
     diversity_score: float
     notes: list[str]
     metadata: dict[str, Any] = field(default_factory=dict)
@@ -151,7 +148,6 @@ class EvalResult:
         return cls(
             success=bool(data["success"]),
             refusal_score=float(data["refusal_score"]),
-            usefulness_score=float(data["usefulness_score"]),
             diversity_score=float(data["diversity_score"]),
             notes=list(data.get("notes", [])),
             metadata=dict(data.get("metadata", {})),

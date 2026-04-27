@@ -23,7 +23,6 @@ def main() -> None:
         memory_summary.get("recent_failure_tags", [])
         or failure_patterns.get("top_tags", [])
     )
-    usefulness = float(feedback.get("usefulness_score", 0.0))
     refusal = float(feedback.get("refusal_score", 0.0))
 
     draft_name = "clarify-and-wrap-draft"
@@ -36,7 +35,6 @@ def main() -> None:
             ),
             "triggering_patterns": {
                 "recent_failure_tags": recent_tags,
-                "usefulness_score": usefulness,
                 "refusal_score": refusal,
                 "analysis_context": meta_context,
             },

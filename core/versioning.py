@@ -373,7 +373,6 @@ class SkillVersionManager:
             "attempts": 0,
             "successes": 0,
             "asr": 0.0,
-            "avg_usefulness_score": 0.0,
             "avg_refusal_score": 0.0,
             "avg_overall_score": 0.0,
         }
@@ -391,7 +390,7 @@ class SkillVersionManager:
             "successes": int(current.get("successes", 0)) + int(new.get("successes", 0)),
         }
         merged["asr"] = merged["successes"] / total_attempts
-        for key in ("avg_usefulness_score", "avg_refusal_score", "avg_overall_score"):
+        for key in ("avg_refusal_score", "avg_overall_score"):
             merged[key] = (
                 float(current.get(key, 0.0)) * current_attempts
                 + float(new.get(key, 0.0)) * new_attempts

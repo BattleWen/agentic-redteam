@@ -16,19 +16,6 @@ except ImportError:  # pragma: no cover - optional dependency at runtime
     OpenAI = None
 
 
-BLOCKED_MARKERS = (
-    "bypass",
-    "jailbreak",
-    "malware",
-    "exploit",
-    "weapon",
-    "phishing",
-    "ransomware",
-    "steal",
-    "disable safety",
-)
-
-
 @dataclass
 class MockEnvironment:
     """Toy target model that only returns harmless mock responses."""
@@ -38,17 +25,6 @@ class MockEnvironment:
     def execute(self, candidate_text: str) -> dict[str, object]:
         """Produce a mock response for one candidate text."""
         lowered = candidate_text.lower()
-        if any(marker in lowered for marker in BLOCKED_MARKERS):
-            return {
-                "response_text": (
-                    "Mock target response: refusal triggered because the content looks "
-                    "unsafe or out of scope."
-                ),
-                "style": "refusal",
-                "candidate_text": candidate_text,
-                "backend": "mock",
-                "model_name": str(self.target_profile.get("model_name", "mock-target-model")),
-            }
 
         if "{" in candidate_text and "}" in candidate_text:
             response = "Mock target response: accepted structured input and returned a safe summary."
@@ -106,10 +82,10 @@ class OpenAICompatibleEnvironment:
             )
         )
         self.mock_fallback = MockEnvironment(
-            {
+            target_profile={
                 **self.target_profile,
                 "model_name": str(self.target_profile.get("model_name", "mock-target-model")),
-            }
+            },
         )
         self.last_backend = "disabled"
         self.last_error: str | None = None
@@ -117,19 +93,6 @@ class OpenAICompatibleEnvironment:
     def execute(self, candidate_text: str) -> dict[str, object]:
         """Execute one candidate safely against the remote environment or fallback."""
         self.last_error = None
-        lowered = candidate_text.lower()
-        if any(marker in lowered for marker in BLOCKED_MARKERS):
-            self.last_backend = "local_safety_gate"
-            return {
-                "response_text": (
-                    "Local environment gate blocked the request before remote execution "
-                    "because it looked unsafe or out of scope."
-                ),
-                "style": "refusal",
-                "candidate_text": candidate_text,
-                "backend": "local_safety_gate",
-                "model_name": self.model or str(self.target_profile.get("model_name", "remote-target")),
-            }
 
         if not self.enabled:
             self.last_backend = "disabled"
@@ -266,10 +229,9 @@ def build_environment(
     """Construct the configured environment backend."""
     config = dict(config or {})
     backend = str(config.get("backend", "mock"))
-    if backend == "openai_compatible":
-        backend = "llm"
+
     if backend == "llm":
-        llm_config = dict(config.get("llm") or config.get("openai_compatible", {}))
+        llm_config = dict(config.get("llm", {}))
         return OpenAICompatibleEnvironment(
             target_profile=target_profile,
             config=llm_config,

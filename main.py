@@ -2,6 +2,13 @@
 
 from __future__ import annotations
 
+# Disable proxy for internal cluster services before any imports
+import os
+os.environ.pop("http_proxy", None)
+os.environ.pop("https_proxy", None)
+os.environ.pop("HTTP_PROXY", None)
+os.environ.pop("HTTPS_PROXY", None)
+
 import argparse
 import json
 from pathlib import Path
@@ -88,6 +95,8 @@ def parse_args() -> argparse.Namespace:
 
 def main() -> None:
     """Run the configured workflow and print a compact summary."""
+    os.environ["NO_PROXY"] = "s-20260414130351-jjtwx-decode.ailab-safethm.svc,ailab-safethm.svc,.svc,.cluster.local"
+    os.environ["no_proxy"] = os.environ["NO_PROXY"]
     args = parse_args()
     seed_prompt = _resolve_seed_prompt(args)
     project_root = Path(__file__).resolve().parent

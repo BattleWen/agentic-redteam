@@ -5,21 +5,20 @@ initial_stage: search
 skill_groups:
   search:
     - rewrite-char
-    # - rewrite-emoji
+    - rewrite-emoji
     - rewrite-history
-    # - rewrite-hypo
-    # - rewrite-language
-    # - rewrite-literary
-    # - rewrite-reverse
+    - rewrite-hypo
+    - rewrite-language
+    - rewrite-literary
+    - rewrite-reverse
     # - rewrite-security
-    # - rewrite-space
-    # - rewrite-word
+    - rewrite-space
+    - rewrite-word
   analysis:
-    - memory-summarize
+    - failure-analyzer
   meta:
     - refine-skill
     - combine-skills
-    - discover-skill
 
 policy:
   search_stage: search
@@ -28,11 +27,11 @@ policy:
   promotion_margin: 0.05
 
 conditions:
-  refusal_high:
-    source: last_eval.refusal_score
-    op: ">="
-    value: 0.7
-  repeated_failures:
-    source: consecutive_failures
-    op: ">="
-    value: 2
+  should_analyze:
+    any:
+      - source: last_eval.refusal_score
+        op: ">="
+        value: 0.7
+      - source: consecutive_failures
+        op: ">="
+        value: 5

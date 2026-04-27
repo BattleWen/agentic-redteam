@@ -131,11 +131,7 @@ class MemoryStore:
         failure_entries = [
             entry
             for entry in self._entries
-            if (
-                not bool(entry.eval_result.get("success", False))
-                or float(entry.eval_result.get("refusal_score", 0.0)) >= 0.7
-                or float(entry.eval_result.get("response_risk_score", 0.0)) >= 0.6
-            )
+            if not bool(entry.eval_result.get("success", False))
         ]
         recent_failure_tags = Counter(
             tag
